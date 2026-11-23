@@ -1,0 +1,353 @@
+"""异步数据库会话管理（SQLite + aiosqlite）。"""
+from __future__ import annotations
+
+import logging
+import os
+from pathlib import Path
+from typing import AsyncGenerator
+
+from sqlalchemy import event
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+
+from app.db.models import Base
+
+DB_PATH = os.environ.get("DB_PATH", str(Path(__file__).resolve().parent.parent.parent / "data" / "autohunter.db"))
+Path(DB_PATH).parent.mkdir(parents=True, exist_ok=True)
+
+DATABASE_URL = f"sqlite+aiosqlite:///{DB_PATH}"
+
+engine = create_async_engine(
+    DATABASE_URL, echo=False, future=True,
+    # 默认 QueuePool 只有 pool_size=5 + max_overflow=10 = 15 条连接。
+    # orchestrator 高并发时（多 worker × 心跳/落库/情报 + reviewer +
+    # killsweep + escalate + API/WebSocket），同时存活的 session 远超 15，
+    # 导致连接获取超时。SQLite 是文件级 DB，连接创建开销极低，可以放心调大。
+    pool_size=20,
+    max_overflow=40,
+    pool_timeout=60,
+)
+SessionLocal = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+
+# 每条物理连接建立时统一设置 PRAGMA（init_db 的一次性 PRAGMA 只作用于建库那条连接，
+# aiosqlite 连接池里后续每条新连接都需要重新设，否则 busy_timeout 默认为 0、
+# 一遇写锁立刻 SQLITE_BUSY）。24x7 下 orchestrator 写事件 + N 个 heartbeat +
+# API 读 + worker 落库高并发，这几项是缓解锁竞争性价比最高的优化。
+_CONNECT_PRAGMAS = (
+    "PRAGMA busy_timeout=5000;",          # 写锁最多等 5s 再报错，吸收瞬时竞争
+    "PRAGMA synchronous=NORMAL;",         # WAL 下安全，显著降低写延迟
+    "PRAGMA foreign_keys=ON;",
+    "PRAGMA cache_size=-16000;",          # 约 16MB page cache；每条连接一份，不能再开 64MB
+    "PRAGMA mmap_size=67108864;",         # 64MB mmap，避免把整库映射进 cgroup
+    "PRAGMA temp_store=MEMORY;",          # ORDER BY/GROUP BY 临时表走内存
+    "PRAGMA wal_autocheckpoint=1000;",
+    # checkpoint 之后把 WAL 文件截到上限。被动 autocheckpoint 只搬页，不缩小 -wal。
+    "PRAGMA journal_size_limit=268435456;",  # 256MB
+)
+
+
+@event.listens_for(engine.sync_engine, "connect")
+def _set_sqlite_pragma(dbapi_connection, _connection_record):
+    cursor = dbapi_connection.cursor()
+    try:
+        for pragma in _CONNECT_PRAGMAS:
+            cursor.execute(pragma)
+        # 库级设置，每条新连接再确认一次，避免混进非 WAL 连接。
+        cursor.execute("PRAGMA journal_mode=WAL;")
+        cursor.fetchone()
+    finally:
+        cursor.close()
+
+
+# 轻量自动迁移：新增列时无需删库（demo 友好）
+# (table, column, "TYPE DEFAULT ...")
+_MIGRATIONS = [
+    # 任务级可选红线（JSON 数组，存勾选的 redline id）
+    ("tasks", "redline_checks", "JSON DEFAULT '[]'"),
+    # 未证实计数：同一漏洞被"未证实"打回的次数，达阈值强制归档进 AI 未采纳。
+    # 必须放进自动迁移清单——漏了会让 ORM 查到不存在的列，
+    # 连带 _sweep_orphan_superseded 每次启动都报错（实测新服务器踩过）。
+    ("reviews", "uncertain_attempts", "INTEGER DEFAULT 0"),
+    # 受阻状态（六分失败分类）：blocked 的目标进 waiting 而非 dead，记录挡住原因与解锁条件
+    ("targets", "block_reason", "TEXT DEFAULT ''"),
+    ("targets", "unblock_condition", "TEXT DEFAULT ''"),
+    ("targets", "blocked_at", "DATETIME"),
+    ("targets", "block_count", "INTEGER DEFAULT 0 NOT NULL"),
+    # 重启计数：与 retry_count 分开，避免「重启一次就报废正在跑的目标」
+    ("targets", "restart_count", "INTEGER DEFAULT 0 NOT NULL"),
+    # CVSS 向量落库：报告与人工复审需要按 NVD 公式复算定级
+    ("reviews", "cvss_vector", "TEXT DEFAULT ''"),
+    # 报告导出用字段：老库启动时自动 ADD COLUMN，不需要手工迁移
+    ("findings", "impact", "TEXT DEFAULT ''"),
+    ("findings", "fix_suggestion", "TEXT DEFAULT ''"),
+    ("targets", "prefilter_fail_count", "INTEGER DEFAULT 0 NOT NULL"),
+    ("targets", "prefilter_retry_at", "DATETIME"),
+    ("reviews", "user_status", "VARCHAR(20) DEFAULT 'pending'"),
+    ("reviews", "user_severity", "VARCHAR(10)"),
+    ("reviews", "user_notes", "TEXT DEFAULT ''"),
+    ("reviews", "user_edits", "JSON DEFAULT '{}'"),
+    ("reviews", "submitted", "BOOLEAN DEFAULT 0"),
+    ("reviews", "user_reviewed_at", "DATETIME"),
+    ("targets", "priority_score", "FLOAT DEFAULT 0"),
+    ("targets", "priority_reason", "VARCHAR(300) DEFAULT ''"),
+    ("reviews", "deepen_directive", "TEXT DEFAULT ''"),
+    ("targets", "deepen_context", "JSON"),
+    ("targets", "deepen_count", "INTEGER DEFAULT 0"),
+    ("targets", "leaked_creds", "JSON"),
+    ("targets", "dead_reason", "VARCHAR(300) DEFAULT ''"),
+    ("targets", "last_error", "VARCHAR(500) DEFAULT ''"),
+    ("targets", "school", "VARCHAR(200) DEFAULT ''"),
+    ("findings", "owner", "VARCHAR(300) DEFAULT ''"),
+    ("findings", "kill_chain", "JSON"),
+    ("findings", "assistant_messages", "JSON DEFAULT '[]'"),
+    ("findings", "llm_model", "VARCHAR(200) DEFAULT ''"),
+    ("findings", "llm_base_url", "VARCHAR(300) DEFAULT ''"),
+    ("killsweeps", "affected_table", "JSON DEFAULT '[]'"),
+    ("system_settings", "engines", "JSON DEFAULT '{}'"),
+    ("tasks", "engine", "VARCHAR(20) DEFAULT ''"),
+    ("tasks", "auth_bindings", "JSON"),
+    ("targets", "auth_context", "JSON"),
+    ("targets", "auth_status", "JSON"),
+    ("tasks", "deepen_cap", "INTEGER DEFAULT 2"),
+    ("system_settings", "ui", "JSON DEFAULT '{}'"),
+    # 用户置顶标记：全局漏洞库/资产库列表中置顶行优先展示。
+    # NOT NULL + DEFAULT 0：老库补列时现有行全部置为 False，向前兼容。
+    ("findings", "is_top", "BOOLEAN DEFAULT 0 NOT NULL"),
+    ("targets", "is_top", "BOOLEAN DEFAULT 0 NOT NULL"),
+    ("tasks", "is_top", "BOOLEAN DEFAULT 0 NOT NULL"),
+    ("tasks", "runtime_stats", "JSON DEFAULT '{}'"),
+    ("system_settings", "proxy", "JSON DEFAULT '{}'"),
+    ("tasks", "auto_killsweep", "BOOLEAN DEFAULT 1 NOT NULL"),
+]
+
+# 唯一索引：目标库(host)/漏洞库(dedup_key)的 DB 级查重兜底。
+# 名字与 models.__table_args__ 保持一致；老库表已存在不会被 create_all 补，靠这里建。
+_UNIQUE_INDEXES = [
+    ("ux_targets_task_host",
+     "CREATE UNIQUE INDEX IF NOT EXISTS ux_targets_task_host ON targets(task_id, host, source)"),
+    ("ux_findings_dedup_global",
+     "CREATE UNIQUE INDEX IF NOT EXISTS ux_findings_dedup_global ON findings(dedup_key) "
+     "WHERE dedup_key <> ''"),
+]
+
+# 普通索引：跨 host 查重按归一化类型别名集合做 IN 预筛时走索引，避免全表扫。
+# create_all 不会给已存在的老表补索引，这里显式建。
+_SECONDARY_INDEXES = [
+    ("ix_findings_vuln_type_status",
+     "CREATE INDEX IF NOT EXISTS ix_findings_vuln_type_status ON findings(vuln_type, status)"),
+    # 派发热点：_pop_queued 按 (task_id, status='queued') 过滤 + priority_score 排序。
+    ("ix_targets_task_status_priority",
+     "CREATE INDEX IF NOT EXISTS ix_targets_task_status_priority "
+     "ON targets(task_id, status, priority_score)"),
+    ("ix_targets_task_status_priority_created",
+     "CREATE INDEX IF NOT EXISTS ix_targets_task_status_priority_created "
+     "ON targets(task_id, status, priority_score, created_at)"),
+    # 审核派发：_dispatch_reviews 按 (task_id, status='pending_review') 取。
+    ("ix_findings_task_status",
+     "CREATE INDEX IF NOT EXISTS ix_findings_task_status ON findings(task_id, status)"),
+    ("ix_findings_task_status_created",
+     "CREATE INDEX IF NOT EXISTS ix_findings_task_status_created ON findings(task_id, status, created_at)"),
+    # findings 列表/详情排序：按 (task_id, created_at DESC)。
+    ("ix_findings_task_created",
+     "CREATE INDEX IF NOT EXISTS ix_findings_task_created ON findings(task_id, created_at)"),
+    # 看板统计 + results/submit-list/review-queue/rejected 联表过滤的核心复合索引。
+    ("ix_reviews_task_verdict_user",
+     "CREATE INDEX IF NOT EXISTS ix_reviews_task_verdict_user "
+     "ON reviews(task_id, verdict, user_status, submitted)"),
+    ("ix_reviews_task_verdict_score",
+     "CREATE INDEX IF NOT EXISTS ix_reviews_task_verdict_score "
+     "ON reviews(task_id, verdict, score)"),
+    ("ix_reviews_task_verdict_user_score",
+     "CREATE INDEX IF NOT EXISTS ix_reviews_task_verdict_user_score "
+     "ON reviews(task_id, verdict, user_status, score)"),
+    ("ix_reviews_task_user_submitted_score",
+     "CREATE INDEX IF NOT EXISTS ix_reviews_task_user_submitted_score "
+     "ON reviews(task_id, user_status, submitted, score)"),
+    ("ix_reviews_task_user_reviewed_score",
+     "CREATE INDEX IF NOT EXISTS ix_reviews_task_user_reviewed_score "
+     "ON reviews(task_id, user_status, user_reviewed_at, score)"),
+    # 全局漏洞库 /api/vulns：跨任务按 (user_status='passed', submitted) 过滤。
+    ("ix_reviews_user_status_submitted",
+     "CREATE INDEX IF NOT EXISTS ix_reviews_user_status_submitted "
+     "ON reviews(user_status, submitted)"),
+    # 全局硬骨头库：按 (status IN dead/skipped) 过滤 + updated_at DESC 排序。
+    ("ix_targets_status_updated",
+     "CREATE INDEX IF NOT EXISTS ix_targets_status_updated ON targets(status, updated_at)"),
+    # 看板 killsweep 计数 + 列表：按 (task_id, is_killsweep)。
+    ("ix_killsweeps_task_iskillsweep",
+     "CREATE INDEX IF NOT EXISTS ix_killsweeps_task_iskillsweep "
+     "ON killsweeps(task_id, is_killsweep)"),
+    ("ix_killsweeps_task_hit_rank",
+     "CREATE INDEX IF NOT EXISTS ix_killsweeps_task_hit_rank "
+     "ON killsweeps(task_id, is_killsweep, verified, asset_count, created_at)"),
+    ("ix_killsweeps_origin_finding",
+     "CREATE INDEX IF NOT EXISTS ix_killsweeps_origin_finding "
+     "ON killsweeps(origin_finding_id)"),
+    # 运行异常日志：按 level/agent 过滤 + ts DESC 排序。
+    ("ix_task_events_level_ts",
+     "CREATE INDEX IF NOT EXISTS ix_task_events_level_ts ON task_events(level, ts)"),
+    # 看板历史回放：WHERE task_id=? ORDER BY id DESC LIMIT N。
+    ("ix_task_events_task_id_id",
+     "CREATE INDEX IF NOT EXISTS ix_task_events_task_id_id ON task_events(task_id, id)"),
+    # 置顶排序：全局漏洞库 / 资产库 ORDER BY is_top DESC, created_at/updated_at DESC。
+    # 布尔列基数低，复合索引让置顶行优先走索引扫描，避免全表排。
+    ("ix_findings_is_top_created",
+     "CREATE INDEX IF NOT EXISTS ix_findings_is_top_created ON findings(is_top, created_at)"),
+    ("ix_targets_is_top_updated",
+     "CREATE INDEX IF NOT EXISTS ix_targets_is_top_updated ON targets(is_top, updated_at)"),
+    ("ix_tasks_is_top_created",
+     "CREATE INDEX IF NOT EXISTS ix_tasks_is_top_created ON tasks(is_top, created_at)"),
+]
+
+# 废弃的残留列：老 schema 里是 NOT NULL 无默认值，新代码不再写入会导致 INSERT 失败。
+# SQLite 不支持 DROP COLUMN/ALTER COLUMN（旧版），用"给残留列补默认值"的方式重建表。
+# (table, [废弃列名])
+_DROP_COLUMNS = [
+    ("reviews", ["user_decision"]),
+]
+
+
+async def init_db() -> None:
+    async with engine.begin() as conn:
+        # SQLite 并发：开启 WAL，提升 24x7 读写并发能力
+        await conn.exec_driver_sql("PRAGMA journal_mode=WAL;")
+        await conn.run_sync(Base.metadata.create_all)
+        await _auto_migrate(conn)
+        await _ensure_unique_indexes(conn)
+        await _ensure_secondary_indexes(conn)
+
+
+async def _ensure_unique_indexes(conn) -> None:
+    """为老库补建唯一索引（查重 DB 级兜底）。
+    若历史数据已有重复导致唯一索引建不上，降级为普通索引——保数据不丢，
+    新数据仍由应用层 dedup 拦截。"""
+    # targets 去重索引从「同任务 host 唯一」升级为「同任务 host+source 唯一」。
+    # 单站协作需要同一真实 host 以不同 source(路线) 并行入队；普通 fofa/manual
+    # 仍然 source 相同，继续由 DB 兜底去重。
+    rows = await conn.exec_driver_sql(
+        "SELECT name, sql FROM sqlite_master WHERE type='index' AND tbl_name='targets'"
+    )
+    target_indexes = {r[0]: (r[1] or "") for r in rows.fetchall()}
+    target_unique_sql = target_indexes.get("ux_targets_task_host", "")
+    target_shape = target_unique_sql.replace("\n", " ").lower()
+    if target_unique_sql and "source" not in target_shape:
+        try:
+            await conn.exec_driver_sql("DROP INDEX IF EXISTS ux_targets_task_host")
+        except Exception:
+            pass
+
+    # findings 去重索引从「(task_id, dedup_key)」升级为「(dedup_key) 全局唯一」。
+    # 老库若已有旧索引，先删后建，确保跨任务查重真正由 DB 兜底。
+    rows = await conn.exec_driver_sql(
+        "SELECT name, sql FROM sqlite_master WHERE type='index' AND tbl_name='findings'"
+    )
+    indexes = {r[0]: (r[1] or "") for r in rows.fetchall()}
+    old_sql = indexes.get("ux_findings_task_dedup", "")
+    new_sql = indexes.get("ux_findings_dedup_global", "")
+    wants_old_shape = "task_id, dedup_key" in old_sql.replace("\n", " ")
+    wants_new_shape = "ON findings(dedup_key)" in new_sql.replace("\n", " ")
+    if wants_old_shape or (new_sql and not wants_new_shape):
+        try:
+            await conn.exec_driver_sql("DROP INDEX IF EXISTS ux_findings_task_dedup")
+        except Exception:
+            pass
+        try:
+            await conn.exec_driver_sql("DROP INDEX IF EXISTS ux_findings_dedup_global")
+        except Exception:
+            pass
+
+    for name, sql in _UNIQUE_INDEXES:
+        try:
+            await conn.exec_driver_sql(sql)
+        except Exception:
+            try:
+                await conn.exec_driver_sql(sql.replace("UNIQUE INDEX", "INDEX"))
+            except Exception:
+                pass
+
+
+async def _ensure_secondary_indexes(conn) -> None:
+    """为老库补建普通查询索引（性能优化，失败不阻断启动）。"""
+    for _name, sql in _SECONDARY_INDEXES:
+        try:
+            await conn.exec_driver_sql(sql)
+        except Exception:
+            pass
+
+
+async def _auto_migrate(conn) -> None:
+    for table, col, decl in _MIGRATIONS:
+        rows = await conn.exec_driver_sql(f"PRAGMA table_info({table})")
+        existing = {r[1] for r in rows.fetchall()}
+        if col not in existing:
+            await conn.exec_driver_sql(f"ALTER TABLE {table} ADD COLUMN {col} {decl}")
+
+    # 清理废弃残留列（老 schema 的 NOT NULL 列会阻塞新代码 INSERT）
+    for table, cols in _DROP_COLUMNS:
+        rows = await conn.exec_driver_sql(f"PRAGMA table_info({table})")
+        existing = {r[1] for r in rows.fetchall()}
+        for col in cols:
+            if col in existing:
+                try:
+                    await conn.exec_driver_sql(f"ALTER TABLE {table} DROP COLUMN {col}")
+                except Exception:
+                    # 旧 SQLite 不支持 DROP COLUMN 时不阻断启动；线上镜像用新版 SQLite 会正常清理。
+                    pass
+
+
+async def get_session() -> AsyncGenerator[AsyncSession, None]:
+    async with SessionLocal() as session:
+        yield session
+
+
+logger = logging.getLogger("autohunter.db")
+
+# 周期 checkpoint 间隔（秒）。默认 300；设为 0 关闭。
+# 思路来自 cnzxo：https://github.com/StanleyNull/AutoHunter/pull/85
+WAL_CHECKPOINT_INTERVAL = float(os.environ.get("AUTOHUNTER_WAL_CHECKPOINT_INTERVAL", "300"))
+_WAL_CHECKPOINT_MODES = frozenset({"PASSIVE", "FULL", "RESTART", "TRUNCATE"})
+
+
+async def checkpoint_wal(mode: str = "TRUNCATE") -> dict | None:
+    """把 WAL 页写回主库，并按模式截断 -wal 文件。
+
+    24x7 下读事务如果横跨测绘/LLM，会钉住 WAL 快照，被动 autocheckpoint 推不到头，
+    -wal 只增不减。这里用独立的 aiosqlite 连接执行，避开 SQLAlchemy 已经打开的事务
+    （wal_checkpoint 不能在事务里跑）。拿不到锁就返回 busy=1，不抛给主流程。
+    """
+    if mode not in _WAL_CHECKPOINT_MODES:
+        raise ValueError(f"unsupported wal checkpoint mode: {mode}")
+    import aiosqlite
+
+    try:
+        conn = await aiosqlite.connect(DB_PATH, timeout=5.0)
+        try:
+            await conn.execute("PRAGMA busy_timeout=5000;")
+            cursor = await conn.execute(f"PRAGMA wal_checkpoint({mode});")
+            row = await cursor.fetchone()
+            await cursor.close()
+        finally:
+            await conn.close()
+        if not row:
+            return None
+        return {"busy": int(row[0]), "log": int(row[1]), "checkpointed": int(row[2])}
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("WAL checkpoint(%s) 失败：%s", mode, exc)
+        return None
+
+
+async def run_periodic_wal_checkpoint() -> None:
+    """后台按间隔做 TRUNCATE checkpoint，把 -wal 截断回收。"""
+    import asyncio
+
+    interval = WAL_CHECKPOINT_INTERVAL
+    if interval <= 0:
+        logger.info("WAL 周期 checkpoint 已关闭（AUTOHUNTER_WAL_CHECKPOINT_INTERVAL=0）")
+        return
+    while True:
+        await asyncio.sleep(interval)
+        result = await checkpoint_wal("TRUNCATE")
+        if result and result.get("checkpointed"):
+            logger.info(
+                "WAL checkpoint: 已回收 log=%d checkpointed=%d busy=%d",
+                result.get("log", 0), result.get("checkpointed", 0), result.get("busy", 0),
+            )

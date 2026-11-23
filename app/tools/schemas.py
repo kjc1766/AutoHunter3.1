@@ -1,0 +1,831 @@
+"""工具的 function calling schema 定义。
+
+submit_finding 的参数 schema 直接对应 Finding 结构，强制 LLM 结构化输出
+（用户决策：工具参数 schema 为主 + Pydantic 兜底校验）。
+"""
+from __future__ import annotations
+
+TOOL_SCHEMAS = [
+    {
+        "type": "function",
+        "function": {
+            "name": "http_request",
+            "description": "发一个 HTTP 请求并返回完整的请求包，以及状态码、响应头和响应体。挖洞取证的首选工具。默认带 Chrome UA。会按域携带并吸收 Cookie（含重定向链每一跳），登录后深挖无需每次手拼凭证。headers 里的 Cookie 只覆盖同名，不会清空其它会话 cookie。【登录/CAS/SSO】follow_redirects=true。【上传】用 files 发 multipart，不要手拼 boundary。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "url": {"type": "string", "description": "完整 URL"},
+                    "method": {"type": "string", "description": "HTTP 方法", "default": "GET"},
+                    "headers": {"type": "object", "description": "请求头键值对", "additionalProperties": {"type": "string"}},
+                    "data": {"type": "string", "description": "请求体原始字符串（如表单 a=1&b=2）"},
+                    "json_body": {"type": "object", "description": "JSON 请求体（与 data 二选一）"},
+                    "files": {
+                        "type": "object",
+                        "description": "multipart 上传。如 {\"file\":{\"filename\":\"t.txt\",\"content\":\"hello\",\"content_type\":\"text/plain\"}}，或 {\"file\":\"@相对工作目录的文件\"}。与 json_body 互斥，可与 data 表单字段并存。",
+                    },
+                    "follow_redirects": {"type": "boolean", "default": False, "description": "是否自动跟随 302/301 跳转。登录/CAS/SSO 走通登录链必须设 true（自动带齐每跳 Cookie）。仅想看单跳 302 目标时才用 false。"},
+                    "confirm_destructive": {"type": "boolean", "default": False, "description": "疑似删库/清缓存/覆盖文件时会先暂停让你反思。确认无害后再设 true。"},
+                    "confirm_reason": {"type": "string", "description": "确认时必填：为何无害（SRC_TEST_/ROLLBACK/只证明接口存在）。"},
+                },
+                "required": ["url"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "run_shell",
+            "description": "在工作目录执行 shell 命令并返回输出。可用 curl/nuclei/sqlmap/nmap/httpx/whatweb 或自写脚本。扫描器仅在已有明确入口/参数/模板时辅助，禁止泛扫。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "command": {"type": "string", "description": "要执行的完整命令"},
+                    "timeout": {"type": "integer", "description": "超时秒数，默认 120"},
+                    "confirm_destructive": {"type": "boolean", "default": False, "description": "疑似删库/清缓存/覆盖文件时会先暂停让你反思。确认无害后再设 true。"},
+                    "confirm_reason": {"type": "string", "description": "确认时必填：为何无害（SRC_TEST_/ROLLBACK/只证明接口存在）。"},
+                },
+                "required": ["command"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "decode_transform",
+            "description": "纯本地解析编码/凭证：解码 base64/hex/url、解析 JWT(看 alg/payload 给攻击建议)、识别哈希、计算 md5/sha1/sha256。遇到看不懂的 token/参数/响应值先用它看清结构。零副作用。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "value": {"type": "string", "description": "要解析的字符串（token/编码串/凭证/响应字段值）"},
+                    "mode": {
+                        "type": "string",
+                        "enum": ["auto", "base64", "hex", "url", "jwt", "hash"],
+                        "description": "auto=自动尝试所有；指定则只做该种；hash=计算哈希并识别输入像哪种哈希。默认 auto。",
+                        "default": "auto",
+                    },
+                },
+                "required": ["value"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "eval_javascript",
+            "description": "在容器 node 里执行 JS，用于登录页 AES/RSA/SM2 加密、签名计算。把加密函数和密钥拼进 code，console.log 输出密文。没有 DOM。算出后用 http_request POST。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "code": {"type": "string", "description": "完整 JS，结果必须 console.log 出来"},
+                    "timeout": {"type": "integer", "description": "超时秒数，默认 8，最大 20"},
+                },
+                "required": ["code"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "suggest_waf_bypass",
+            "description": "纯本地 WAF 辅助：具体验证请求被 403/406/429/拦截页阻断时，据状态码/响应头/体和 payload 判断 WAF 指纹并给少量候选变形。不代表已绕过，必须再用 http_request 做 baseline vs variant 实证。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "payload": {"type": "string", "description": "被拦截的最小 payload 或可控参数值"},
+                    "status_code": {"type": "integer", "description": "被拦截响应的 HTTP 状态码，如 403/406/429"},
+                    "response_headers": {"type": "object", "description": "被拦截响应头", "additionalProperties": {"type": "string"}},
+                    "response_body": {"type": "string", "description": "被拦截响应体片段"},
+                    "context": {
+                        "type": "string",
+                        "enum": ["generic", "sqli", "xss", "path", "json", "api", "header"],
+                        "description": "当前验证场景，用于排序候选变形",
+                        "default": "generic",
+                    },
+                },
+                "required": ["payload"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "fofa_lookup",
+            "description": "只读资产测绘（走任务所选引擎 FOFA/Quake/Hunter/…，统一用 FOFA 语法书写、自动翻译）：①确认目标归属(org/备案/证书)把 owner 填准；②查同 IP/同域开放的端口服务找隐藏攻击面。只测绘不碰目标。拿裸 IP/确认不了归属时尤其有用。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {"type": "string", "description": 'FOFA 语法（非 FOFA 引擎自动翻译），如 ip="1.2.3.4" / host="example.com" / domain="x.com"'},
+                    "size": {"type": "integer", "description": "返回样本数，默认 10，最大 30", "default": 10},
+                },
+                "required": ["query"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "check_duplicate_finding",
+            "description": "提交漏洞前查重：用类型/标题/URL 对比全局同系统历史漏洞。只拦同系统同洞；duplicate=true 时不要再 submit，同系统其它 endpoint/类型/证据链可继续挖。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "vuln_type": {"type": "string", "description": "漏洞类型，如 idor/unauthorized_access/sql_injection"},
+                    "title": {"type": "string", "description": "准备提交的漏洞标题"},
+                    "target_url": {"type": "string", "description": "漏洞所在URL"},
+                    "description": {"type": "string", "description": "简要描述，用于辅助模糊查重"},
+                },
+                "required": ["vuln_type", "title", "target_url"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "submit_finding",
+            "description": (
+                "提交一个确认的漏洞。提交前必须先用 http_request/run_shell 取得真实证据"
+                "（原始请求/响应包）。提交前必须如实填写 self_check 自检。"
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "vuln_type": {"type": "string", "description": "漏洞类型，如 sql_injection/rce/captcha_bypass/idor/unauthorized_access/file_upload"},
+                    "title": {"type": "string", "description": "[目标]-[模块]-[简述]"},
+                    "severity_claimed": {"type": "string", "enum": ["严重", "高危", "中危", "低危"]},
+                    "target_url": {"type": "string"},
+                    "owner": {"type": "string", "description": "归属单位/业务系统 + 确认依据。EduSRC 写学校/教育机构；企业模式写企业/集团/系统，如「XX集团 CRM（依据：证书CN+页面版权）」；核实不了填「待确认（原因…）」"},
+                    "description": {"type": "string", "description": "漏洞类型、触发条件、影响范围"},
+                    "steps": {"type": "array", "items": {"type": "string"}, "description": "逐条复现步骤"},
+                    "poc": {"type": "string", "description": "可执行 PoC，curl 命令或 payload"},
+                    "raw_request": {"type": "string", "description": "原始请求包"},
+                    "raw_response": {"type": "string", "description": "原始响应包，含证明漏洞的关键差异"},
+                    "evidence": {
+                        "type": "object",
+                        "properties": {
+                            "extracted_data_sample": {"type": "string"},
+                            "tool_output": {"type": "string"},
+                            "notes": {"type": "string"},
+                        },
+                    },
+                    "affected_scope": {"type": "string", "description": "影响面"},
+                    "impact": {
+                        "type": "string",
+                        "description": (
+                            "漏洞危害：只写最终能造成哪些伤害（人/号/钱/内部正文/能改能删），每种伤害单独一行。"
+                            "有例子的必须举例（姓名/手机号/证件实值，或改成了什么）；"
+                            "没真打过的权限面照写能力但不要编具体受害者；"
+                            "不是步骤，不写「第一层/第二层」，不用「不限于」「等敏感信息」这类模糊表述。"
+                        ),
+                    },
+                    "fix_suggestion": {
+                        "type": "string",
+                        "description": "修复建议：贴合本洞的精准整改方案，简短直白可落地",
+                    },
+                    "kill_chain": {
+                        "type": "array",
+                        "description": "攻击链路：按时间顺序记录你怎么一步步打下来的（侦察→定位→利用→取证），让人一眼看懂这洞的拿下方法",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "method": {"type": "string", "description": "这一步的方法/动作，如『审计前端JS』『提取API端点』『构造越权请求』『取出数据取证』"},
+                                "detail": {"type": "string", "description": "这步具体做了什么、发现或得到了什么"},
+                            },
+                            "required": ["method"],
+                        },
+                    },
+                    "self_check": {
+                        "type": "object",
+                        "description": "对照当前 SRC 模式忽略清单的自检",
+                        "properties": {
+                            "is_reflected_xss": {"type": "boolean"},
+                            "needs_admin_login": {"type": "boolean"},
+                            "needs_mitm": {"type": "boolean"},
+                            "is_pure_info_leak": {"type": "boolean"},
+                            "scanner_only_no_poc": {"type": "boolean"},
+                            "is_public_interface": {"type": "boolean", "description": "该接口是否本就是面向公众的公开接口"},
+                            "info_leak_hits_strict_list": {"type": "boolean", "description": "若信息泄露类：是否命中身份证照片/大头照/身份证号/密码哈希死规矩"},
+                        },
+                        "required": ["is_reflected_xss", "needs_admin_login", "needs_mitm", "is_pure_info_leak", "scanner_only_no_poc"],
+                    },
+                },
+                "required": ["vuln_type", "title", "severity_claimed", "target_url", "description", "steps", "poc", "kill_chain", "self_check"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "report_intel",
+            "description": "把可复用情报沉淀到全局情报库供后续 worker 复用。只报真验证有效的高价值情报：①cred=验证过能登录的账密；②endpoint=验证有效的未授权/敏感端点；③profile=技术栈/WAF/突破口画像。出洞或撞库成功后顺手报一条。维护器会拦截垃圾(未验证凭证/公开静态浅路径/占位画像/含失败结论)，别报这些。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "kind": {"type": "string", "enum": ["cred", "endpoint", "profile"], "description": "情报类型"},
+                    "payload": {
+                        "type": "object",
+                        "description": "按 kind 填：cred={username,password}；endpoint={path,vuln_type}；profile={key,value}",
+                        "additionalProperties": {"type": "string"},
+                    },
+                    "summary": {"type": "string", "description": "一句话说明（可选），如『后台弱口令可登』"},
+                    "verified": {"type": "boolean", "description": "是否亲自验证有效（true 会标记为高可信）", "default": False},
+                },
+                "required": ["kind", "payload"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "report_coverage",
+            "description": "单站协作覆盖记录：把本路线已经盘点/验证过的 API、参数、测试类型和结论记下来，供后续 worker 避免重复并补盲区。没出洞也要在收尾前报告覆盖面。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "route": {"type": "string", "description": "当前路线名，如 site_map/site_js/site_auth，可留空由系统补"},
+                    "summary": {"type": "string", "description": "一句话总结本轮覆盖面和主要结论"},
+                    "endpoints": {
+                        "type": "array",
+                        "description": "已测试的接口/入口样例，控制在 20 条内，按价值排序",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "method": {"type": "string", "description": "GET/POST/PUT/DELETE 等"},
+                                "path": {"type": "string", "description": "路径或完整 URL"},
+                                "status": {"type": "string", "description": "状态码或结果状态，如 200/403/需登录/timeout"},
+                                "checks": {"type": "string", "description": "测过的点：未授权/越权/注入/上传/配置泄露等"},
+                                "result": {"type": "string", "description": "结论：公开正常/需登录/无差异/存在强线索/已提交漏洞等"},
+                            },
+                        },
+                    },
+                    "remaining": {"type": "string", "description": "尚未覆盖但值得后续路线继续的入口/参数/假设"},
+                },
+                "required": ["summary"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "finish",
+            "description": (
+                "结束对当前目标的挖掘。**必须如实区分结论类型**——这个判定决定目标之后会不会被重新派回来，"
+                "选错会浪费或漏掉真实攻击面。"
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "verdict": {
+                        "type": "string",
+                        "enum": ["found", "no_vuln", "blocked", "inconclusive", "invalid_precondition", "cancelled"],
+                        "description": (
+                            "found=至少提交过一个漏洞；"
+                            "no_vuln=**真的挖透了**，主要攻击面都试过且确认无可用漏洞；"
+                            "blocked=**被外部条件挡住没试成**（WAF 拦截页、需要短信验证码、接口 429 限流、目标 502/超时、"
+                            "需要特定角色但你拿不到）——这不是「没洞」，目标会被挂起等条件满足后重试；"
+                            "inconclusive=做了但判不出来（响应异常、证据矛盾、拿不准）；"
+                            "invalid_precondition=前提不成立（需要内网、目标已下线、该功能根本不存在）；"
+                            "cancelled=被外部中断（预算耗尽、用户叫停）"
+                        ),
+                    },
+                    "summary": {"type": "string", "description": "本次挖掘总结：测了哪些面、为什么是这个结论"},
+                    "block_reason": {
+                        "type": "string",
+                        "description": "verdict=blocked 时必填：具体被什么挡住，如「3 个注入点都返回 WAF 拦截页」「登录需要短信验证码，无可用号码」「/api/* 全部 429」",
+                    },
+                    "unblock_condition": {
+                        "type": "string",
+                        "description": (
+                            "verdict=blocked 时必填：**满足什么条件就能继续挖**，如「换一个未被封的出口 IP」"
+                            "「拿到有效会话 Cookie」「该接口从 502 恢复」。"
+                            "写不出解锁条件，说明这不是 blocked，应该选 no_vuln 或 inconclusive。"
+                        ),
+                    },
+                    "deepen_lead": {
+                        "type": "string",
+                        "description": (
+                            "可选。仅在你已经突破了某个入口（拿到凭证/token/登录态/可控参数/敏感接口）"
+                            "但本轮没把它打穿成完整漏洞时填写：用一句话给出下一轮该如何顺着这个据点深挖的"
+                            "具体方向（如：用拿到的 token 调 /api/admin/users 验证越权；用泄露的 ak/sk 调 OSS 列桶）。"
+                            "没有可深挖的明确线索就留空。这会触发系统自动再派一轮定向深挖。"
+                        ),
+                    },
+                },
+                "required": ["verdict", "summary"],
+            },
+        },
+    },
+]
+
+
+JS_ANALYZER_TOOL_SCHEMAS = [
+    {
+        "type": "function",
+        "function": {
+            "name": "analyze_javascript",
+            "description": "审计前端 JS/接口/硬编码密钥/路由。SPA、登录页、接口藏前端、常规入口不足时优先用。传入口 URL 自动抓 HTML 和关联 JS 提取接口清单和攻击链，或传 JS 文本离线分析。只是线索地图，必须继续用 http_request/run_shell 实证。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "url": {"type": "string", "description": "入口 URL 或 JS URL。传 URL 时会递归抓取关联 JS。"},
+                    "text": {"type": "string", "description": "已拿到的 JS/HTML 文本；与 url 二选一。"},
+                    "max_depth": {"type": "integer", "description": "递归抓取 JS 深度，默认 2，最大 4。"},
+                    "max_assets": {"type": "integer", "description": "最多抓取资产数，默认 80，最大 150。"},
+                    "deep": {
+                        "type": "boolean",
+                        "description": (
+                            "深度静态提取（3.1 新增）。开关打开后会：①递归下载主包里列出的**全部懒加载 chunk**"
+                            "（不只 import/src 引用的）；②从 chunk 抽相对路径并用主包的 baseURL 拼成完整接口。"
+                            "对使用了 baseURL+懒加载 chunk 的 SPA（RuoYi/Vue 系）能多发现数倍接口，"
+                            "包括 swagger 关闭时隐藏的业务线（如 /api/pool/*）。代价是多下载几十~上百个 JS，耗时约 30-90 秒。"
+                        ),
+                    },
+                    "deep_max_chunks": {"type": "integer", "description": "deep 模式下最多下载多少个 chunk，默认 200。"},
+                    "browser": {
+                        "type": "boolean",
+                        "description": (
+                            "浏览器运行时收割（3.1 新增）。打开后用真实 Chromium 打开页面，"
+                            "监听前端**实际发出的** XHR/fetch，录下接口（含 method 和参数名）。"
+                            "与 deep 互补：deep 看静态代码，browser 看运行时真实请求。"
+                            "适用：SPA 靠前端路由驱动、接口在运行时才拼出来。"
+                            "注意：耗时 30-90 秒；遇到瑞数等强 WAF 会拿到 403 拦截页（此时返回空，不阻塞）。"
+                        ),
+                    },
+                    "browser_timeout": {"type": "integer", "description": "browser 模式单次最多跑多少秒，默认 90。"},
+                },
+            },
+        },
+    }
+]
+
+
+KB_TOOL_SCHEMAS = [
+    {
+        "type": "function",
+        "function": {
+            "name": "kb_catalog",
+            "description": (
+                "查看漏洞知识库目录（实战手册 + HackerOne 真实案例，共 184 篇）。\n"
+                "不传 category：只返回分类概览（每类多少篇 + 几个样例 slug），很省 token。\n"
+                "传 category：展开该分类的全部条目（slug + 一句话摘要），用来决定查哪篇。\n"
+                "典型用法：catalog() 看有哪些类 → catalog(\"注入\") 看该类明细 → kb_lookup 取正文。\n"
+                "进站摸清攻击面后调一次即可，不要反复调。"
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "category": {
+                        "type": "string",
+                        "description": "分类名（如 注入/越权/SSRF）。留空则只返回分类概览。",
+                    },
+                },
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "kb_lookup",
+            "description": (
+                "按 slug 读知识库正文（实战手法、判定标准、假点清单）。"
+                "用 kb_catalog 拿到 slug 后再调；遇到具体攻击面卡住时读对应篇，不要盲猜 slug。"
+                "长文可传 section（小节标题子串）只取那节，省 token。"
+                "标注 stub 的篇是「这类不值钱、别耗精力」的说明，按它指到的模块去挖。"
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "slug": {"type": "string", "description": "kb_catalog 返回的 slug，如 idor-test / ssrf-test / 打穿短表"},
+                    "section": {"type": "string", "description": "可选：小节标题的一部分，只取匹配小节。留空取全文（超长会自动截断并给章节列表）。"},
+                },
+                "required": ["slug"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "kb_search",
+            "description": (
+                "在知识库里搜关键词（如「元数据」「STS」「签名盐」「短信验证码」），返回相关手册和摘要。"
+                "不知道查哪篇时用它，比 kb_catalog 全量翻更快。"
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "keyword": {"type": "string", "description": "搜索词，中文或英文均可"},
+                },
+                "required": ["keyword"],
+            },
+        },
+    },
+]
+
+
+SESSION_TOOL_SCHEMAS = [
+    {
+        "type": "function",
+        "function": {
+            "name": "session_set",
+            "description": "登记已拿到的登录态(cookie 或鉴权头如 Authorization: Bearer xxx)，登记后所有 http_request 自动携带、且自动吸收响应 Set-Cookie。用泄露/用户凭证登录成功后，务必先用它固化登录态，再带着登录态深挖受限接口、后台功能、枚举越权对象——只登录成功不算洞。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "cookies": {
+                        "type": "object",
+                        "description": "要维持的 cookie 键值对，如 {\"JSESSIONID\":\"xxx\"}",
+                        "additionalProperties": {"type": "string"},
+                    },
+                    "headers": {
+                        "type": "object",
+                        "description": "要维持的鉴权头，如 {\"Authorization\":\"Bearer xxx\"}",
+                        "additionalProperties": {"type": "string"},
+                    },
+                    "clear": {"type": "boolean", "description": "true=清空当前会话态后再设置（换账号时用）", "default": False},
+                },
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "update_notes",
+            "description": "更新你的工作笔记（跨轮持久，不会被历史压缩丢掉，每轮自动注入给你）。发现关键信息就立刻记：已确认的端点/凭据/token/cookie、已试过但失败的方向、当前突破口、下一步计划。这是你跨轮'记得自己干了什么'的关键——不记就会重复扫同一条路。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "notes": {"type": "string", "description": "工作笔记内容。建议分块写：【已发现】端点/凭据/token/cookie；【已试失败】方向+原因；【当前突破口】；【下一步】计划。控制在 1500 字内。"},
+                },
+                "required": ["notes"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "rotate_proxy",
+            "description": "切换出口 IP（代理池）。仅当判定被 WAF 封当前出口时调用：整站持续 403/429、换路径换 payload 都无效、且页面有明确 WAF 指纹（先用 suggest_waf_bypass 看过）。调用后出口立即更换、会话 cookie 保留，再用 http_request 重发。普通 403（路径不对、缺权限、英文 Forbidden）不要调。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "reason": {"type": "string", "description": "为什么要换 IP，例如「整站 403 且响应体是 Cloudflare 拦截页」"},
+                },
+            },
+        },
+    },
+]
+
+
+REVIEWER_TOOL_SCHEMAS = [
+    {
+        "type": "function",
+        "function": {
+            "name": "submit_review",
+            "description": "提交对当前 Finding 的审核结论。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "verdict": {"type": "string", "enum": ["accepted", "ignored", "deepen"], "description": "accepted=进最终列表 / ignored=丢弃 / deepen=线索有价值但利用没打穿，打回让 worker 定向深挖"},
+                    "confidence": {"type": "string", "enum": ["confirmed", "likely", "uncertain"], "description": "信度分档"},
+                    "severity_final": {"type": "string", "enum": ["严重", "高危", "中危", "低危"], "description": "最终等级，accepted 时必填"},
+                    "score": {"type": "number", "description": "0-10 评分，必须落在等级对应区间"},
+                    "in_scope": {"type": "boolean", "description": "是否在当前任务 SRC 范围内"},
+                    "is_duplicate": {"type": "boolean", "default": False},
+                    "ignore_reasons": {"type": "array", "items": {"type": "string"}, "description": "忽略理由，ignored 时必填"},
+                    "downgrade_reasons": {"type": "array", "items": {"type": "string"}, "description": "降级理由"},
+                    "deepen_directive": {"type": "string", "description": "深挖指令，verdict=deepen 时必填：具体告诉 worker 这一轮要把什么利用链打穿（如：用泄露的 secret 伪造签名调通 /api/order 取出他人订单数据）"},
+                    "reviewer_notes": {"type": "string", "description": "判断依据"},
+                    "cvss_av": {"type": "string", "enum": ["N", "A", "L", "P"], "description": "CVSS 攻击向量：N 网络可达 / A 相邻网络 / L 本地 / P 物理接触"},
+                    "cvss_ac": {"type": "string", "enum": ["L", "H"], "description": "CVSS 攻击复杂度：L 可稳定重复 / H 需要攻击者控制不了的条件"},
+                    "cvss_pr": {"type": "string", "enum": ["N", "L", "H"], "description": "CVSS 所需权限：N 未授权 / L 普通用户 / H 管理员"},
+                    "cvss_ui": {"type": "string", "enum": ["N", "R"], "description": "CVSS 用户交互：N 不需要 / R 需他人配合"},
+                    "cvss_s": {"type": "string", "enum": ["U", "C"], "description": "CVSS 范围：U 同一安全域 / C 打穿到另一域"},
+                    "cvss_c": {"type": "string", "enum": ["H", "L", "N"], "description": "CVSS 机密性影响"},
+                    "cvss_i": {"type": "string", "enum": ["H", "L", "N"], "description": "CVSS 完整性影响"},
+                    "cvss_a": {"type": "string", "enum": ["H", "L", "N"], "description": "CVSS 可用性影响"},
+                    "cvss_vector": {"type": "string", "description": "可选：直接给完整向量，如 CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:H/A:H。给了八项指标时可不填"},
+                },
+                "required": ["verdict", "confidence", "score", "in_scope", "reviewer_notes"],
+            },
+        },
+    },
+]
+
+
+KILLSWEEP_TOOL_SCHEMAS = [
+    {
+        "type": "function",
+        "function": {
+            "name": "fofa_search",
+            "description": "用 FOFA 语法圈定同款系统并统计规模（走任务所选测绘引擎，非 FOFA 自动翻译）。返回命中总量(size)和样本资产列表（host/title/org）。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {"type": "string", "description": "FOFA 查询语法，如 title=\"XX系统\" || body=\"特征字符串\""},
+                    "edu_only": {"type": "boolean", "description": "是否只统计教育行业(自动叠加 .edu.cn/教育 org 限定)，默认 false 即全网", "default": False},
+                },
+                "required": ["query"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "http_request",
+            "description": "对某个同款站点发请求，验证它是否同样存在该漏洞（实证通杀）。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "url": {"type": "string"},
+                    "method": {"type": "string", "default": "GET"},
+                    "headers": {"type": "object", "additionalProperties": {"type": "string"}},
+                    "data": {"type": "string"},
+                    "json_body": {"type": "object"},
+                    "files": {"type": "object", "description": "multipart 上传字段"},
+                    "follow_redirects": {"type": "boolean", "default": False, "description": "登录/CAS/SSO 走登录链必须设 true（自动带齐每跳 Cookie）。"},
+                    "confirm_destructive": {"type": "boolean", "default": False, "description": "疑似破坏性操作会先暂停反思。确认无害后再设 true。"},
+                    "confirm_reason": {"type": "string", "description": "确认时必填：为何无害。"},
+                },
+                "required": ["url"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "run_shell",
+            "description": "执行 shell 命令（curl 等）辅助验证同款站点。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "command": {"type": "string"},
+                    "timeout": {"type": "integer"},
+                    "confirm_destructive": {"type": "boolean", "default": False, "description": "疑似破坏性操作会先暂停反思。确认无害后再设 true。"},
+                    "confirm_reason": {"type": "string", "description": "确认时必填：为何无害。"},
+                },
+                "required": ["command"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "submit_killsweep",
+            "description": "提交通杀分析结论。无论是否可通杀都要调用一次。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "is_generic_product": {"type": "boolean", "description": "该系统是否为有指纹特征的通用产品/框架（而非单位自研一次性系统）"},
+                    "product_name": {"type": "string", "description": "通用产品/框架名称，如『XX教务系统』『RuoYi框架』；自研系统填『自研/无通用指纹』"},
+                    "is_killsweep": {"type": "boolean", "description": "该漏洞是否为这套系统的通用缺陷、可一打一片（代码层缺陷=可通杀；单位个例配置=不可）"},
+                    "confidence": {"type": "string", "enum": ["confirmed", "likely", "uncertain"], "description": "通杀判定信度：打了同款站点实证成功=confirmed"},
+                    "fofa_query": {"type": "string", "description": "圈定同款系统的最优 FOFA 语法"},
+                    "fingerprint": {"type": "string", "description": "指纹依据：用了哪些 title/body/server/favicon 特征"},
+                    "asset_count": {"type": "integer", "description": "全网同款资产规模(FOFA size)"},
+                    "edu_count": {"type": "integer", "description": "教育行业同款规模"},
+                    "verified_url": {"type": "string", "description": "代表性的一个已验证同款站点 URL；实打成功的每个站点都要列进 affected_table 并标 status=verified，这里填其中一个即可"},
+                    "verified": {"type": "boolean", "description": "是否至少打通 1 个同款站点并实证同样中招（打通多个时也为 true）"},
+                    "affected_table": {
+                        "type": "array",
+                        "description": "通杀影响明细表：每行是一个学校/单位与对应通杀洞，后端会写入查重库，避免后续重复报同一通杀洞。",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "school": {"type": "string", "description": "学校/单位名称；从 org/title/域名推断，未知填待确认"},
+                                "url": {"type": "string", "description": "同款系统 URL/host"},
+                                "host": {"type": "string", "description": "归一化 host，可不填，后端会补"},
+                                "title": {"type": "string", "description": "站点标题"},
+                                "vuln_title": {"type": "string", "description": "该学校对应的通杀漏洞标题"},
+                                "status": {"type": "string", "enum": ["verified", "candidate"], "description": "verified=已实打复现成功的同款站点（可有多个）；candidate=FOFA圈定同款候选"},
+                                "evidence": {"type": "string", "description": "证据/依据，如 FOFA命中、标题特征、验证响应摘要"},
+                            },
+                            "required": ["school", "url", "vuln_title", "status"],
+                        },
+                    },
+                    "notes": {"type": "string", "description": "结论与批量利用建议；不可通杀时说明原因"},
+                },
+                "required": ["is_generic_product", "is_killsweep", "confidence", "notes"],
+            },
+        },
+    },
+]
+
+
+ESCALATE_TOOL_SCHEMAS = [
+    {
+        "type": "function",
+        "function": {
+            "name": "http_request",
+            "description": "顺着已确认的入口继续发包，尝试把危害做大（越权写、遍历、改密、接管、命令执行等）。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "url": {"type": "string"},
+                    "method": {"type": "string", "default": "GET"},
+                    "headers": {"type": "object", "additionalProperties": {"type": "string"}},
+                    "data": {"type": "string"},
+                    "json_body": {"type": "object"},
+                    "files": {"type": "object", "description": "multipart 上传字段"},
+                    "follow_redirects": {"type": "boolean", "default": False, "description": "登录/CAS/SSO 走登录链必须设 true（自动带齐每跳 Cookie）。"},
+                    "confirm_destructive": {"type": "boolean", "default": False, "description": "疑似破坏性操作会先暂停反思。确认无害后再设 true。"},
+                    "confirm_reason": {"type": "string", "description": "确认时必填：为何无害。"},
+                },
+                "required": ["url"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "run_shell",
+            "description": "执行 shell 命令（curl 等）辅助升级利用。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "command": {"type": "string"},
+                    "timeout": {"type": "integer"},
+                    "confirm_destructive": {"type": "boolean", "default": False, "description": "疑似破坏性操作会先暂停反思。确认无害后再设 true。"},
+                    "confirm_reason": {"type": "string", "description": "确认时必填：为何无害。"},
+                },
+                "required": ["command"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "submit_escalation",
+            "description": (
+                "仅当你已把原漏洞【实锤升级】——危害等级实际提升，或影响面出现数量级变化（如单点→批量接管/遍历）"
+                "——时调用一次，交出升级后的完整证据链。没打穿、原地打转、危害没变，请改调 abandon_escalation。"
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "vuln_type": {"type": "string", "description": "升级后的漏洞类型，如『任意用户密码重置+账号接管』"},
+                    "title": {"type": "string", "description": "升级后的漏洞标题（含归属单位/系统 + 升级后的危害）"},
+                    "severity": {"type": "string", "enum": ["严重", "高危", "中危", "低危"], "description": "升级后的最终等级"},
+                    "description": {"type": "string", "description": "升级利用链描述：从原入口如何一步步做大危害"},
+                    "kill_chain": {
+                        "type": "array",
+                        "description": "升级攻击链路，逐步：[{method, detail}]",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "method": {"type": "string"},
+                                "detail": {"type": "string"},
+                            },
+                        },
+                    },
+                    "poc": {"type": "string", "description": "完整可复现 PoC（含关键 curl/请求）"},
+                    "raw_request": {"type": "string", "description": "关键升级步骤的原始请求"},
+                    "raw_response": {"type": "string", "description": "证明升级成功的原始响应（真实成功证据）"},
+                    "affected_scope": {"type": "string", "description": "量化影响面，如『2230 名教师+全部学生可被接管』"},
+                    "impact_count": {"type": "integer", "description": "可量化的受影响对象数量（遍历/接管规模），无则填 0"},
+                },
+                "required": ["vuln_type", "title", "severity", "description", "poc", "raw_response"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "abandon_escalation",
+            "description": "本次深挖没能显著升级危害（等级没提升、影响面没质变），放弃并说明原因。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "reason": {"type": "string", "description": "为什么放弃：试了哪些方向、卡在哪、为何危害没变大"},
+                },
+                "required": ["reason"],
+            },
+        },
+    },
+]
+
+
+COLLECTOR_QUERY_SCHEMAS = [
+    {
+        "type": "function",
+        "function": {
+            "name": "gen_query",
+            "description": "产出一条 FOFA 搜索语法，用于本轮目标搜集。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {"type": "string", "description": "可直接调用的 FOFA 查询语法字符串"},
+                    "reason": {"type": "string", "description": "一句话说明本轮覆盖的角度"},
+                },
+                "required": ["query"],
+            },
+        },
+    },
+]
+
+
+COLLECTOR_EDU_SCHEMAS = [
+    {
+        "type": "function",
+        "function": {
+            "name": "judge_edu",
+            "description": "批量判定资产是否属于中国教育行业（EduSRC 范围）。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "results": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+	                                "index": {"type": "integer", "description": "对应输入资产的序号"},
+	                                "is_edu": {"type": "boolean"},
+	                                "school": {"type": "string", "description": "归属学校/教育机构全称，推断不出可空"},
+	                            },
+                            "required": ["index", "is_edu"],
+                        },
+                    },
+                },
+                "required": ["results"],
+            },
+        },
+    },
+]
+
+
+def _compact_descriptions(value, limit: int = 72, _depth: int = 0):
+    """压缩 function schema 里的自然语言描述，保留字段/required/enum 不变。
+
+    OpenAI 兼容 function schema 会随每轮请求一起发送；长 description 是稳定但昂贵的
+    prompt。系统提示已覆盖规则细节，这里只保留最短可辨识说明。
+    """
+    if isinstance(value, list):
+        return [_compact_descriptions(item, limit, _depth + 1) for item in value]
+    if not isinstance(value, dict):
+        return value
+    out = {}
+    for key, item in value.items():
+        if key == "description" and isinstance(item, str):
+            if _depth > 2:
+                continue
+            text = " ".join(item.split())
+            out[key] = text[:limit]
+        else:
+            out[key] = _compact_descriptions(item, limit, _depth + 1)
+    return out
+
+
+TOOL_SCHEMAS.append({
+    "type": "function",
+    "function": {
+        "name": "record_fact",
+        "description": (
+            "记录一条探索事实/结论到全局事实库（含**否定结论**）。与 report_intel 分工："
+            "report_intel 只收可复用情报（凭证/端点/画像），本工具收观察结论。"
+            "必须记录的三类：①证实有的（弱口令入口存在、该路径未授权可读）"
+            "②试过但没打穿的（该参数不可注入、该端口关闭、未发现登录入口）"
+            "③渗透面判断（WAF 类型、技术栈）。"
+            "否定结论同样重要：记下来后续同域 worker 才不会原样重试。"
+            "硬要求：evidence 必须是你在工具输出里真实看到的一行，不许脑补；"
+            "手段没穷尽或只探过一次就标 inferred，确已穷尽且直接看到才标 observed。"
+            "一次探索的多个观察汇总成一条，别拆成多条刷量。"
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "scope": {
+                    "type": "string",
+                    "description": "结论属于哪个攻击面：具体到参数名/端口/路径/入口，如「/api/user/list 的 id 参数」「22 端口」「登录表单的验证码参数」",
+                },
+                "polarity": {
+                    "type": "string",
+                    "enum": ["positive", "negative"],
+                    "description": "positive=证实存在/可用；negative=试过没有/不可利用/已关闭",
+                },
+                "detail": {
+                    "type": "string",
+                    "description": "结论本身。否定结论写「观察到什么 + 试探性读法」，如「加单引号返回 500 但响应体无 SQL 报错，疑似被过滤」",
+                },
+                "evidence": {
+                    "type": "string",
+                    "description": "【一行】关键证据：命令 + 最能证明结论的那一两行输出。不要粘大段输出（细节放 detail）",
+                },
+                "confidence": {
+                    "type": "string",
+                    "enum": ["observed", "inferred"],
+                    "description": "observed=输出里直接看到；inferred=据现象推断。否定结论务必如实标注",
+                },
+            },
+            "required": ["scope", "polarity", "detail", "evidence", "confidence"],
+        },
+    },
+})
+
+
+TOOL_SCHEMAS = _compact_descriptions(TOOL_SCHEMAS)
+JS_ANALYZER_TOOL_SCHEMAS = _compact_descriptions(JS_ANALYZER_TOOL_SCHEMAS)
+SESSION_TOOL_SCHEMAS = _compact_descriptions(SESSION_TOOL_SCHEMAS)
+# 向后兼容别名（历史命名，全模式已可用）。
+REVIEWER_TOOL_SCHEMAS = _compact_descriptions(REVIEWER_TOOL_SCHEMAS)
+KILLSWEEP_TOOL_SCHEMAS = _compact_descriptions(KILLSWEEP_TOOL_SCHEMAS)
+ESCALATE_TOOL_SCHEMAS = _compact_descriptions(ESCALATE_TOOL_SCHEMAS)
+COLLECTOR_QUERY_SCHEMAS = _compact_descriptions(COLLECTOR_QUERY_SCHEMAS)
+COLLECTOR_EDU_SCHEMAS = _compact_descriptions(COLLECTOR_EDU_SCHEMAS)
