@@ -928,6 +928,19 @@ self_check 里如实填 is_public_interface 和 info_leak_hits_strict_list。
 
 ## ① analyze_javascript(deep=true)：穷举 chunk 抽接口
 
+> **【硬性要求】只要你打算「读前端 JS 找接口」，必须先调一次 deep=true。**
+> 不要用 curl/run_shell 手工下载 js、手工 grep 路径 —— 那只能看到你猜的那一个文件，
+> 而且很容易被体积/编码坑住（实测 worker 手工读一个 1.3KB 的 dev.js 卡了 5 轮仍只拿到 5 个模块名，
+> 而同站点 deep 一次给出 522 个接口）。
+>
+> **触发条件（任一条命中就调）**：
+> - 要读任何 `.js` 文件找接口/路由
+> - 发现 swagger/actuator 关闭
+> - 首页/主包只给出个位数接口
+> - 目标有 `/_nuxt/`、`/assets/`、`/static/js/` 且 JS 体积大
+> - 连续 2 轮都在猜路径却拿不到新接口
+
+
 调 `analyze_javascript(url="<入口页>", deep=true)`：
 - 递归下载主包里列出的**全部** chunk（不只是 import/src 引用的）
 - 从 chunk 抽相对路径 + 拼主包的 baseURL

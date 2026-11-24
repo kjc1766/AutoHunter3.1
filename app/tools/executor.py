@@ -437,6 +437,34 @@ class ToolExecutor:
             full_out += f"\n\n...[输出超过 {_SHELL_CAPTURE_MAX_BYTES} 字节，已丢弃约 {omitted_bytes} 字节以保护内存]..."
         # 完整输出落地，避免截断丢证据（带体积上限，防 24x7 撞盘）
         log_file = self._write_log(f"$ {command}\n\n{full_out}")
+        # ===== 3.1：手工摸接口时提醒改用 analyze_javascript(deep=true) =====
+        # 放在 executor 层（所有 agent 共用），而不是 worker._dispatch ——
+        # 实测 escalate.py / killsweep.py 也有独立 run_shell 调用，在 _dispatch 打补丁会漏。
+        # 触发：连续第 3 次起的 shell 调用里仍出现 curl/wget/grep/sed/cat（= 手工爬接口）。
+        # 上限 2 次，避免刷屏。
+        _deep_banner = ""
+        try:
+            _low = (command or "").lower()
+            _manual = any(k in _low for k in ("curl", "wget", "grep", "sed", "cat"))
+            _not_deep = not any(k in _low for k in ("analyze", "api_docs", "swagger"))
+            self._shell_probe = getattr(self, "_shell_probe", 0) + 1
+            self._deep_hint_sent = getattr(self, "_deep_hint_sent", 0)
+            if _manual and _not_deep and self._shell_probe >= 3 and self._deep_hint_sent < 2:
+                self._deep_hint_sent += 1
+                _deep_banner = (
+                    f"\n\n############ 3.1 强制提示（必读）############\n"
+                    f"你已用 shell 手工摸接口 {self._shell_probe} 次。逐个 curl/grep 只能看到你猜的那一个文件。\n"
+                    "改用工具即可一次拿到全站接口：\n"
+                    "  analyze_javascript(url=\"<入口页 URL>\", deep=true)\n"
+                    "  → 递归下载主包列出的全部懒加载 chunk，抽相对路径并结合 baseURL 拼成完整接口\n"
+                    "实测同站点：手工读 dev.js(1.3KB) 卡 5 轮只拿到 5 个模块名；\n"
+                    "            deep=true 一次返回 522 个接口（含 /pool、/credit 全部业务线）。\n"
+                    "注意：deep 只对 Vue/React 等 SPA（有 chunk 结构）有效；\n"
+                    "      WebPlus/传统 CMS 站点没有 chunk，继续用现有接口清单即可。\n"
+                    "###############################################\n"
+                )
+        except Exception:
+            _deep_banner = ""
 
         return {
             "ok": rc == 0 and not timed_out and not cancelled,
@@ -444,8 +472,9 @@ class ToolExecutor:
             "timed_out": timed_out,
             "cancelled": cancelled,
             "elapsed_sec": elapsed,
-            "output": _truncate(full_out),
+            "output": (_deep_banner + _truncate(full_out)) if _deep_banner else _truncate(full_out),
             "output_file": str(log_file) if log_file else "",
+            "deep_hint": bool(_deep_banner),
         }
 
     @staticmethod
@@ -829,11 +858,16 @@ class ToolExecutor:
         # ===== 3.1：流量落盘（供报告回查/复现）=====
         if self._traffic is not None:
             try:
+                # 坑：不能用 dict(resp.request.headers) 去取请求头 ——
+                # httpx 的 request 若带流式 body，访问 .content 会抛
+                # "Attempted to access streaming request content, without having called read()"，
+                # 实测线上触发过 tool_exception。
+                # 直接用本函数已有的 merged_headers（就是实际发出去的请求头）。
                 _tr = self._traffic.record(
                     method=str(method).upper(),
                     url=str(resp.url),
                     status=int(resp.status_code or 0),
-                    req_headers=dict(resp.request.headers) if resp.request else {},
+                    req_headers=dict(merged_headers or {}),
                     req_body=(data or (json.dumps(json_body, ensure_ascii=False) if json_body else "")),
                     resp_headers=dict(resp.headers),
                     resp_body=body or "",
@@ -1399,6 +1433,16 @@ class ToolExecutor:
                     return s
                 main_url = urljoin(entry_url, max(cands, key=_score))
             main_text, _ = _fetch(main_url)
+            # 保护：主包太小说明这不是 SPA（可能是零星工具脚本/三方库），
+            # 递归几百个 chunk 纯属浪费（30-120 秒白跑）。
+            # 实测：Vite/Vue 主包普遍 1-5MB，小于 30KB 的几乎没有业务接口。
+            if len(main_text) < 30_000:
+                return {
+                    "endpoints": [],
+                    "main_url": main_url,
+                    "reason": f"主包过小（{len(main_text)} 字节），非 SPA，跳过 chunk 递归",
+                    "prompt": "",
+                }
             r = deep_static_analyze(
                 entry_js_url=main_url,
                 main_js_text=main_text,

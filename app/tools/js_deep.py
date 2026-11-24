@@ -23,6 +23,7 @@
 from __future__ import annotations
 
 import logging
+import time as _t
 import re
 from collections import deque
 from typing import Any
@@ -60,6 +61,9 @@ _API_SEGMENT_HINT = re.compile(
 )
 _ASSET_SEG = re.compile(r"^/(?:web|static|assets|libs|css|js|img|images|fonts|media|dist|public)\b", re.I)
 
+# chunk 下载总时长上限（秒）。顺序下载 + 单请求 12s 超时，2 核机器必须设上限，
+# 否则 400 个 chunk 最坏能拖 80 分钟。实测接口集中在前 100 个 chunk 内。
+CHUNK_BUDGET_SEC = int(__import__("os").environ.get("DEEP_CHUNK_BUDGET_SEC", "180"))
 _MAX_CHUNKS = 400          # 单次最多下载多少 chunk（实测一个站 320 个，取不全就漏业务线）
 _MAX_TOTAL_BYTES = 40 * 1024 * 1024   # 汇总文本上限，防内存爆
 
@@ -152,6 +156,7 @@ def harvest_chunks(
     if not names:
         return {"text": "", "fetched": 0, "candidates": 0, "errors": [], "names": []}
 
+    t0 = _t.monotonic()
     js_dir = entry_js_url.rsplit("/", 1)[0] if "/" in entry_js_url else ""
     total = 0
     fetched = 0
@@ -161,6 +166,12 @@ def harvest_chunks(
 
     for name in names[:max_chunks]:
         if total >= _MAX_TOTAL_BYTES:
+            break
+        # 总时长保护：2 核机器上顺序下载 400 个 chunk，
+        # 若某些请求各自超时 12s，最坏会拖到 80 分钟，拖垮整个任务。
+        # 超过 HARVEST_CHUNK_BUDGET 秒就停，把已拿到的先返回（接口通常集中在前几十个）。
+        if (_t.monotonic() - t0) > CHUNK_BUDGET_SEC:
+            errors.append({"chunk": "(remaining)", "error": f"总时长超 {CHUNK_BUDGET_SEC}s，提前结束"})
             break
         for cand in _chunk_url_candidates(entry_js_url, name, js_dir):
             if cand in seen_urls:

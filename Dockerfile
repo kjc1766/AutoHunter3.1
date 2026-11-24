@@ -25,7 +25,10 @@ ENV DEBIAN_FRONTEND=noninteractive \
     PIP_RETRIES=5
 
 # 系统工具 + 挖洞常用工具
-RUN apt-get update && apt-get install -y --no-install-recommends \
+# 换国内 Debian 镜像源：官方源在国内下载 75+ 个包要 60 分钟以上（实测 62 分钟仍在第 75 个包）。
+# 先试阿里云，失败则保留原源继续。
+RUN (sed -i 's|deb.debian.org|mirrors.aliyun.com|g' /etc/apt/sources.list.d/debian.sources 2>/dev/null || true) && \
+    apt-get update && apt-get install -y --no-install-recommends \
         curl wget git ca-certificates \
         nmap \
         python3-pip \
@@ -99,7 +102,8 @@ RUN pip install --no-cache-dir -r requirements.txt
 ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright \
     PLAYWRIGHT_SKIP_BROWSER_GC=1 \
     PLAYWRIGHT_DOWNLOAD_HOST=https://cdn.npmmirror.com/binaries/playwright
-RUN apt-get update && \
+RUN (sed -i 's|deb.debian.org|mirrors.aliyun.com|g' /etc/apt/sources.list.d/debian.sources 2>/dev/null || true) && \
+    apt-get update && \
     apt-get install -y --no-install-recommends \
         libatomic1 libnss3 libnspr4 libatk1.0-0 libatk-bridge2.0-0 \
         libcups2 libdrm2 libxkbcommon0 libxcomposite1 libxdamage1 \

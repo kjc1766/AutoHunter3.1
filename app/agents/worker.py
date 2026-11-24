@@ -938,14 +938,25 @@ class Worker:
                 }
             url = (args.get("url") or "").strip()
             text = args.get("text") or ""
-            self._emit("tool_js_analyze", round=rnd, url=url[:200], has_text=bool(text))
+            # ===== 3.1：deep 默认开启 =====
+            # 实测 LLM 调 analyze_javascript 时**只传 url，从不传 deep**，
+            # 导致 deep 永远为 False，522 接口的能力等于没用上。
+            # 所以改成默认 True：只要传了 url 就做 deep 提取。
+            # 代价：deep 会下几十~上百个 chunk（30-120 秒），
+            # 但 JS 分析本来就不是高频动作（实测整个任务只调 1 次），值得。
+            # 显式传 deep=false 时才关闭（给 SPA 不适用/时间紧的情况留口子）。
+            _deep_arg = args.get("deep")
+            _use_deep = True if _deep_arg is None else bool(_deep_arg)
+            _use_deep = _use_deep and bool(url)  # 纯文本分析不做 deep
+            self._emit("tool_js_analyze", round=rnd, url=url[:200], has_text=bool(text),
+                       deep=_use_deep)
             return self.executor.analyze_javascript(
                 url=url,
                 text=text,
                 max_depth=args.get("max_depth", 2),
                 max_assets=args.get("max_assets", 80),
-                deep=bool(args.get("deep")),
-                deep_max_chunks=int(args.get("deep_max_chunks") or 200),
+                deep=_use_deep,
+                deep_max_chunks=int(args.get("deep_max_chunks") or 300),
                 browser=bool(args.get("browser")),
                 browser_timeout=int(args.get("browser_timeout") or 90),
             )
@@ -973,12 +984,22 @@ class Worker:
                     ),
                 }
             self._emit("tool_shell", round=rnd, command=command[:200])
-            return self.executor.run_shell(
+            _shell_res = self.executor.run_shell(
                 command,
                 timeout=args.get("timeout"),
                 confirm_destructive=args.get("confirm_destructive", False),
                 confirm_reason=args.get("confirm_reason") or "",
             )
+            # ===== 3.1：deep 提醒已下沉到 executor.run_shell（所有 agent 共用）=====
+            # 这里只负责把「提醒已发出」上报成事件，便于统计与前端展示。
+            # 为什么不在这一层做：escalate.py / killsweep.py 也各自调 run_shell，
+            # 在 _dispatch 打补丁会漏掉那两条路径（实测 46 次 tool_shell 零触发）。
+            try:
+                if isinstance(_shell_res, dict) and _shell_res.get("deep_hint"):
+                    self._emit("deep_hint", round=rnd)
+            except Exception:
+                pass
+            return _shell_res
 
         if name == "decode_transform":
             self._mark_tool_used(name, rnd)
