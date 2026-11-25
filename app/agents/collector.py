@@ -195,6 +195,38 @@ async def _existing_hosts(session: AsyncSession, task_id: str) -> set[str]:
     return {r[0] for r in rows.all()}
 
 
+def _url_dedup_key(url: str) -> str:
+    """URL 归一化后作为入队去重键。
+
+    实测问题：南开测试 106 条 target 里只有 64 个不同 URL，同一 URL 重复入队 7 次；
+    测试5 66 条里只有 42 个不同 URL。根因是入队只按 host 去重，
+    同一 host 下的同路径被反复写入，白白跑完 4 次受阻流程。
+    """
+    if not url:
+        return ""
+    u = url.strip().lower()
+    # 去掉协议差异、默认端口、末尾斜杠、fragment
+    u = u.replace("https://", "").replace("http://", "")
+    u = u.split("#", 1)[0]
+    if u.endswith("/") and u.count("/") > 1:
+        u = u.rstrip("/")
+    u = u.replace(":80/", "/").replace(":443/", "/")
+    if u.endswith(":80") or u.endswith(":443"):
+        u = u.rsplit(":", 1)[0]
+    return u
+
+
+async def _existing_urls(session: AsyncSession, task_id: str) -> set[str]:
+    """已入队 URL 的归一化集合，用于 URL 级去重（补 host 级去重的盲区）。"""
+    rows = await session.execute(select(Target.url).where(Target.task_id == task_id))
+    out: set[str] = set()
+    for (u,) in rows.all():
+        k = _url_dedup_key(u or "")
+        if k:
+            out.add(k)
+    return out
+
+
 async def _existing_cluster_state(session: AsyncSession, task_id: str) -> dict[str, dict]:
     rows = (await session.execute(
         select(Target).where(
@@ -353,6 +385,7 @@ async def refill(session: AsyncSession, task: Task, low_watermark: int = 5,
             await progress_cb(phase, text, {**payload, "_persist": persist})
 
     seen = await _existing_hosts(session, task.id)
+    seen_urls = await _existing_urls(session, task.id)
     cluster_state = await _existing_cluster_state(session, task.id)
     added = 0
     # 上面是只读。后面有泄露查询、测绘和探活，先结束读事务，避免快照钉住 WAL。
@@ -375,9 +408,16 @@ async def refill(session: AsyncSession, task: Task, low_watermark: int = 5,
         for item in parsed:
             host = item.get("host") or ""
             url = item.get("url") or ""
+            # host 级去重：同一 host 只入队一次（原本逻辑）
+            # URL 级去重：拦住「同 host 下同路径重复入队」（3.1 新增，实测能砍掉 36-40% 冗余）
+            ukey = _url_dedup_key(url or _ensure_url(host) if host else "")
             if not host or host in seen:
                 continue
+            if ukey and ukey in seen_urls:
+                continue
             seen.add(host)
+            if ukey:
+                seen_urls.add(ukey)
             if _is_unusable(url, host):
                 continue
             if prefilter.is_sensitive_host(host) or prefilter.is_sensitive_host(url):
@@ -901,6 +941,13 @@ async def _fofa_collect(
         host = normalize_host(raw_host)
         if not host or host in seen:
             continue
+        # URL 级去重：FOFA 返回的 host 字段常带路径/端口，同一资产的
+        # 多个路径会被当成不同目标重复入队（3.1 新增）
+        _fkey = _url_dedup_key(raw_host if isinstance(raw_host, str) else "")
+        if _fkey and _fkey in seen_urls:
+            continue
+        if _fkey:
+            seen_urls.add(_fkey)
         if _is_unusable(raw_host, host):
             seen.add(host)
             continue  # 畸形 IPv6/无效主机，丢弃（不入库、不占派发）
