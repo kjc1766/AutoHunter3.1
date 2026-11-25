@@ -1,0 +1,1605 @@
+<script setup>
+import { computed, nextTick, onMounted, onUnmounted, reactive, ref, watch } from "vue";
+import { api } from "../api.js";
+import LlmModelPicker from "../components/LlmModelPicker.vue";
+import ProxyPoolEditor from "../components/ProxyPoolEditor.vue";
+import { copyText, formatLlmTestCopy } from "../clipboard.js";
+import {
+  ACCENT_PRESETS,
+  applyUi,
+  compressImageFile,
+  DEFAULTS,
+  hexToHue,
+  hueToHex,
+  loadUiPrefs,
+  prefsFromApi,
+  prefsToApi,
+  resetUiLocal,
+  saveUiPrefs,
+} from "../uiTheme.js";
+
+const loading = ref(true);
+const saving = ref(false);
+const testingLlm = ref(false);
+const toastMsg = ref("");
+const meta = ref({ updated_at: null });
+const llmMode = ref("single");
+const llmTest = ref(null);
+const singleModels = ref([]);
+const singleModelsLoading = ref(false);
+const singleModelsError = ref("");
+// 工作目录管理状态
+const workdirLoading = ref(false);
+const workdirCleaning = ref(false);
+const workdirStats = ref(null);
+const workdirResult = ref(null);
+const cleanupRetentionDays = ref(7);
+const backupLoading = ref(false);
+const backupBusy = ref("");
+const backupStats = ref(null);
+const backupIncludeWork = ref(false);
+const restoreIncludeWork = ref(false);
+const restoreFile = ref(null);
+const backupRestarting = ref(false);
+/** 自动保存状态：idle | pending | saving | saved | error | incomplete */
+const autoSaveStatus = ref("idle");
+const autoSaveError = ref("");
+let autoSaveTimer = null;
+let suppressAutoSave = false; // load / 保存回写期间屏蔽 watch
+let dirtyDuringSave = false; // 保存飞行中又有改动 → finally 后补一次调度
+let healthPoll = null;
+let restartPoll = null;   // pollHealth 的重启轮询计时器（组件卸载时清理，防泄漏）
+
+// ---- 一键更新 ----
+const updateState = reactive({
+  checking: false,
+  info: null,       // check_update 返回
+  updating: false,
+  restarting: false,
+  error: "",
+  supported: true,   // 后端是否注册了 update 路由（原版不注册 → 隐藏整个区块）
+});
+
+async function checkUpdate() {
+  updateState.checking = true;
+  updateState.error = "";
+  updateState.info = null;
+  try {
+    updateState.info = await api.checkUpdate();
+    // 非 git / 网络失败：区块仍显示，把原因和手动更新指引给用户看
+    // 以前用 /非 git|无法/ 直接 supported=false，导致「检查更新整块消失」
+  } catch (e) {
+    const msg = String(e.message || e);
+    // 仅原版未注册 update 路由（404）时隐藏；发布版始终保留入口
+    if (/^\s*404\b|not found/i.test(msg)) {
+      updateState.supported = false;
+    } else {
+      updateState.error = msg.replace(/^\d+\s*/, "");
+    }
+  } finally {
+    updateState.checking = false;
+  }
+}
+
+async function runUpdate() {
+  if (!confirm("确认更新？服务会自动重启，进行中的任务会优雅暂停。")) return;
+  updateState.updating = true;
+  updateState.error = "";
+  try {
+    const r = await api.runUpdate();
+    if (r.ok) {
+      updateState.restarting = true;
+      pollHealth();
+    } else {
+      updateState.error = r.error || "更新失败";
+      if (r.command) updateState.info = { ...updateState.info, rebuild_command: r.command };
+    }
+  } catch (e) {
+    updateState.error = String(e.message || e).replace(/^\d+\s*/, "");
+  } finally {
+    updateState.updating = false;
+  }
+}
+
+function pollHealth() {
+  let attempts = 0;
+  clearInterval(restartPoll);
+  restartPoll = setInterval(async () => {
+    attempts++;
+    try {
+      const r = await fetch("/health");
+      if (r.ok) {
+        clearInterval(restartPoll);
+        const fromBackup = backupRestarting.value;
+        updateState.restarting = false;
+        backupRestarting.value = false;
+        toast(fromBackup ? "备份恢复完成，服务已重启" : "更新完成，服务已重启 🎉");
+        updateState.info = null;
+        load();
+      }
+    } catch {}
+    if (attempts > 60) { clearInterval(restartPoll); updateState.restarting = false; backupRestarting.value = false; updateState.error = "重启超时，请手动刷新页面"; }
+  }, 3000);
+}
+
+const form = reactive({
+  base_url: "",
+  api_key: "",
+  key_ref: "",
+  model: "",
+  protocol: "openai_chat",
+  temperature: 0.3,
+  api_key_set: false,
+  llm_providers: [],
+  fofa_key: "",
+  fofa_key_set: false,
+  fofa_base_url: "",
+  max_pages: 20,
+  page_size: 100,
+  default_intent_mode: "",
+  default_engine: "fofa",
+  engines: {},
+  available_engines: [],
+  concurrency: 3,
+  deepen_cap: 2,
+  skip_score_threshold: -10,
+  worker_prompt_version: "legacy",
+});
+
+const engineKeysSetCount = computed(() =>
+  Object.values(form.engines || {}).filter((e) => e && e.key_set).length
+);
+
+function toast(m) {
+  toastMsg.value = m;
+  setTimeout(() => (toastMsg.value = ""), 2600);
+}
+
+let _providerUidSeq = 1;
+function nextProviderUid() {
+  return `llm-uid-${_providerUidSeq++}`;
+}
+
+function newLlmProvider() {
+  return {
+    _uid: nextProviderUid(),
+    name: `llm-${form.llm_providers.length + 1}`,
+    base_url: form.base_url || "https://api.deepseek.com/v1",
+    api_key: "",
+    api_key_set: false,
+    api_key_masked: "",
+    key_ref: "",
+    health_ref: "",
+    model: form.model || "deepseek-chat",
+    protocol: form.protocol || "openai_chat",
+    temperature: Number(form.temperature ?? 0.3),
+    weight: 1,
+    enabled: true,
+    testing: false,
+    models: [],
+    modelsLoading: false,
+    modelsError: "",
+    health: {},
+  };
+}
+
+const selectedLlmProvider = ref(0);
+const selectedLlm = computed(() => form.llm_providers[selectedLlmProvider.value] || null);
+
+function normalizeLlmProtocol(protocol) {
+  return ["auto", "openai_chat", "anthropic_messages"].includes(protocol) ? protocol : "auto";
+}
+
+function loadLlmProviders(items = [], { resetSelection = true } = {}) {
+  form.llm_providers = items.map((provider, idx) => ({
+    _uid: provider._uid || nextProviderUid(),
+    name: provider.name || `llm-${idx + 1}`,
+    base_url: provider.base_url || "",
+    api_key: "",
+    api_key_set: !!provider.api_key_set,
+    api_key_masked: provider.api_key_masked || "",
+    key_ref: provider.key_ref || "",
+    health_ref: provider.health_ref || "",
+    model: provider.model || "",
+    protocol: normalizeLlmProtocol(provider.protocol),
+    temperature: provider.temperature ?? form.temperature ?? 0.3,
+    weight: provider.weight ?? 1,
+    enabled: provider.enabled !== false,
+    testing: false,
+    models: [],
+    modelsLoading: false,
+    modelsError: "",
+    health: provider.health || {},
+  }));
+  if (resetSelection) {
+    selectedLlmProvider.value = form.llm_providers.length ? 0 : -1;
+  } else if (!form.llm_providers.length) {
+    selectedLlmProvider.value = -1;
+  } else {
+    selectedLlmProvider.value = Math.min(
+      Math.max(selectedLlmProvider.value, 0),
+      form.llm_providers.length - 1,
+    );
+  }
+}
+
+/** 保存成功后就地合并服务端回写，禁止整表替换（否则选中端点会跳回第 1 个，正在编辑的内容也丢）。 */
+function mergeProvidersAfterSave(saved = [], clearedKeyIndexes = []) {
+  const cleared = new Set(clearedKeyIndexes);
+  for (let i = 0; i < form.llm_providers.length; i++) {
+    const local = form.llm_providers[i];
+    const remote = saved[i];
+    if (!remote) continue;
+    if (cleared.has(i)) local.api_key = "";
+    local.api_key_set = !!remote.api_key_set;
+    local.api_key_masked = remote.api_key_masked || local.api_key_masked || "";
+    local.key_ref = remote.key_ref || local.key_ref || "";
+    local.health_ref = remote.health_ref || local.health_ref || "";
+    if (remote.health) local.health = remote.health;
+  }
+}
+
+function providerHealthClass(provider) {
+  const status = provider.health?.status || "";
+  if (["ok", "failed", "cooldown", "half_open"].includes(status)) {
+    return status.replace("_", "-");
+  }
+  return "unknown";
+}
+
+function providerHealthText(provider) {
+  const status = provider.health?.status || "";
+  if (status === "ok") return "健康";
+  if (status === "failed") return "失效";
+  if (status === "cooldown") return "冷却中";
+  if (status === "half_open") return "探测中";
+  return "未检测";
+}
+
+function providerHealthTitle(provider) {
+  const health = provider.health || {};
+  if (!health.last_seen) return "暂无运行时健康记录";
+  const parts = [health.last_seen];
+  if (health.consecutive_failures) parts.push(`连续失败 ${health.consecutive_failures} 次`);
+  if (health.cooldown_until) parts.push(`冷却到 ${health.cooldown_until}`);
+  if (health.last_error) parts.push(health.last_error);
+  return parts.join("；");
+}
+
+function addLlmProvider() {
+  form.llm_providers.push(newLlmProvider());
+  selectedLlmProvider.value = form.llm_providers.length - 1;
+  llmTest.value = null;
+}
+
+function removeLlmProvider(idx) {
+  const provider = form.llm_providers[idx];
+  if (!provider) return;
+  const label = provider.name || provider.model || `端点 #${idx + 1}`;
+  if (!confirm(`确认删除模型端点「${label}」？`)) return;
+  form.llm_providers.splice(idx, 1);
+  if (!form.llm_providers.length) {
+    selectedLlmProvider.value = -1;
+  } else if (selectedLlmProvider.value > idx) {
+    selectedLlmProvider.value -= 1;
+  } else if (selectedLlmProvider.value === idx) {
+    selectedLlmProvider.value = Math.min(idx, form.llm_providers.length - 1);
+  }
+  llmTest.value = null;
+}
+
+function moveLlmProvider(idx, delta) {
+  const next = idx + delta;
+  if (next < 0 || next >= form.llm_providers.length) return;
+  const [provider] = form.llm_providers.splice(idx, 1);
+  form.llm_providers.splice(next, 0, provider);
+  if (selectedLlmProvider.value === idx) selectedLlmProvider.value = next;
+  else if (selectedLlmProvider.value === next) selectedLlmProvider.value = idx;
+}
+
+function buildLlmProvider(provider) {
+  return {
+    name: String(provider.name || "").trim(),
+    base_url: String(provider.base_url || "").trim(),
+    api_key: String(provider.api_key || "").trim(),
+    key_ref: provider.key_ref || "",
+    model: String(provider.model || "").trim(),
+    protocol: normalizeLlmProtocol(provider.protocol),
+    temperature: Number(provider.temperature ?? form.temperature ?? 0.3),
+    weight: Math.max(1, Math.min(100, Number(provider.weight || 1))),
+    enabled: provider.enabled !== false,
+  };
+}
+
+function buildLlmProviders() {
+  return form.llm_providers.map(buildLlmProvider);
+}
+
+function invalidateSingleKey() {
+  form.key_ref = "";
+  form.api_key_set = false;
+  singleModels.value = [];
+  singleModelsError.value = "";
+  llmTest.value = null;
+}
+
+function invalidateProviderKey(provider) {
+  if (!provider) return;
+  provider.key_ref = "";
+  provider.api_key_set = false;
+  provider.api_key_masked = "";
+  provider.health_ref = "";
+  provider.health = {};
+  provider.models = [];
+  provider.modelsError = "";
+  llmTest.value = null;
+}
+
+function validateLlmProviders() {
+  if (llmMode.value !== "pool") {
+    if (!String(form.base_url || "").trim() || !String(form.model || "").trim()
+      || (!String(form.api_key || "").trim() && !form.key_ref)) {
+      throw new Error("单端点配置缺少 base_url、api_key 或模型");
+    }
+    return;
+  }
+  if (!form.llm_providers.length) throw new Error("端点池至少需要一个端点");
+  for (const [idx, provider] of buildLlmProviders().entries()) {
+    if (!provider.name || !provider.base_url || !provider.model || (!provider.api_key && !provider.key_ref)) {
+      throw new Error(`LLM 端点 #${idx + 1} 缺少名称、base_url、api_key 或模型`);
+    }
+  }
+  if (!form.llm_providers.some((provider) => provider.enabled !== false)) {
+    throw new Error("端点池至少需要启用一个端点");
+  }
+}
+
+function resultText(item) {
+  if (!item) return "";
+  const parts = [];
+  if (item.protocol) parts.push(item.protocol);
+  if (item.model) parts.push(item.model);
+  if (item.latency_ms) parts.push(`${item.latency_ms}ms`);
+  if (item.status_code) parts.push(`HTTP ${item.status_code}`);
+  if (item.ok && item.reply) parts.push(`reply: ${item.reply}`);
+  if (item.ok && item.tool_calling) {
+    const tc = {
+      yes: "工具调用 ✓",
+      no: "工具调用 ✗ 不支持原生 function calling（系统会自动用提示词模拟兜底；如仍异常可设 AUTOHUNTER_TOOL_COMPAT=prompt）",
+      unknown: "工具调用 ? 未检测到（若挖洞全程不调用工具，可设 AUTOHUNTER_TOOL_COMPAT=prompt 强制模拟）",
+    };
+    parts.push(tc[item.tool_calling] || "");
+  }
+  if (!item.ok && item.error) parts.push(item.error);
+  return parts.filter(Boolean).join(" · ");
+}
+
+async function copyLlmTest(item) {
+  const text = item ? formatLlmTestCopy({ ok: item.ok, results: [item], error_copy: item.error_copy }) : formatLlmTestCopy(llmTest.value || {});
+  const ok = await copyText(text);
+  toast(ok ? "已复制 LLM 错误信息" : "复制失败，请手动选中");
+}
+
+function applyLlmHealthResults(results = []) {
+  for (const item of results) {
+    const provider = form.llm_providers.find((row) =>
+      (row.name && item.name && row.name === item.name)
+      || (row.base_url === item.base_url && row.model === item.model)
+    );
+    if (!provider) continue;
+    provider.health = {
+      status: item.ok ? "ok" : "failed",
+      last_seen: new Date().toISOString(),
+      last_error: item.ok ? "" : (item.error || "测试失败"),
+    };
+  }
+}
+
+async function refreshProviderHealth() {
+  if (llmMode.value !== "pool" || !form.llm_providers.length) return;
+  const res = await api.providerHealth();
+  const byRef = new Map((res.providers || []).map((item) => [item.health_ref, item.health || {}]));
+  suppressAutoSave = true;
+  try {
+    for (const provider of form.llm_providers) {
+      if (provider.health_ref && byRef.has(provider.health_ref)) {
+        provider.health = byRef.get(provider.health_ref);
+      }
+    }
+  } finally {
+    await nextTick();
+    suppressAutoSave = false;
+  }
+}
+
+async function loadSingleModels() {
+  singleModelsLoading.value = true;
+  singleModelsError.value = "";
+  try {
+    const res = await api.listModels({
+      base_url: form.base_url,
+      api_key: form.api_key.trim(),
+      key_ref: form.key_ref,
+      model: form.model,
+      protocol: form.protocol,
+    });
+    if (res?.ok && res.models?.length) {
+      singleModels.value = res.models;
+      if (!form.model || !singleModels.value.includes(form.model)) form.model = singleModels.value[0];
+      toast(`已获取 ${res.models.length} 个模型`);
+    } else {
+      singleModels.value = [];
+      singleModelsError.value = res?.error || "未获取到模型列表";
+      toast("获取模型失败");
+    }
+  } catch (e) {
+    singleModels.value = [];
+    singleModelsError.value = String(e.message || e).replace(/^\d+\s*/, "");
+    toast("获取模型失败");
+  } finally {
+    singleModelsLoading.value = false;
+  }
+}
+
+async function loadProviderModels(idx) {
+  const provider = form.llm_providers[idx];
+  if (!provider) return;
+  // 用 _uid 锚定：请求期间用户若主动换端点，结束时不抢回选中态
+  const keepUid = provider._uid;
+  const keepSelected = selectedLlmProvider.value;
+  suppressAutoSave = true;
+  provider.modelsLoading = true;
+  provider.modelsError = "";
+  try {
+    const res = await api.listModels({
+      base_url: provider.base_url,
+      api_key: String(provider.api_key || "").trim(),
+      protocol: provider.protocol,
+      key_ref: provider.key_ref,
+      model: provider.model,
+    });
+    if (res?.ok && res.models?.length) {
+      provider.models = res.models;
+      if (!provider.model || !provider.models.includes(provider.model)) provider.model = provider.models[0];
+      toast(`已获取 ${res.models.length} 个模型`);
+    } else {
+      provider.models = [];
+      provider.modelsError = res?.error || "未获取到模型列表";
+      toast(`端点 #${idx + 1} 获取模型失败`);
+    }
+  } catch (e) {
+    provider.models = [];
+    provider.modelsError = String(e.message || e).replace(/^\d+\s*/, "");
+    toast(`端点 #${idx + 1} 获取模型失败`);
+  } finally {
+    provider.modelsLoading = false;
+    const nowUid = form.llm_providers[selectedLlmProvider.value]?._uid;
+    // 仅当选中仍是发起查询的端点、或被副作用冲掉时，才按 uid 纠正索引
+    if (nowUid === keepUid || selectedLlmProvider.value === keepSelected) {
+      const found = form.llm_providers.findIndex((p) => p._uid === keepUid);
+      if (found >= 0) selectedLlmProvider.value = found;
+    }
+    suppressAutoSave = false;
+    scheduleAutoSave(); // 可能自动选中了模型
+  }
+}
+
+async function testSingleLlm() {
+  testingLlm.value = true;
+  llmTest.value = null;
+  try {
+    const res = await api.testLLM({
+      base_url: form.base_url,
+      api_key: form.api_key.trim(),
+      key_ref: form.key_ref,
+      model: form.model,
+      protocol: form.protocol,
+      temperature: Number(form.temperature),
+    });
+    llmTest.value = res;
+    toast(res.ok ? "LLM 测试通过" : "LLM 测试失败");
+  } catch (e) {
+    llmTest.value = { ok: false, results: [], error: String(e.message || e).replace(/^\d+\s*/, "") };
+    toast("LLM 测试失败");
+  } finally {
+    testingLlm.value = false;
+  }
+}
+
+async function testLlmProvider(idx) {
+  const provider = form.llm_providers[idx];
+  if (!provider) return;
+  suppressAutoSave = true;
+  provider.testing = true;
+  llmTest.value = null;
+  try {
+    const payload = buildLlmProvider(provider);
+    if (!payload.base_url || !payload.model || (!payload.api_key && !payload.key_ref)) {
+      throw new Error(`LLM 端点 #${idx + 1} 配置不完整`);
+    }
+    const res = await api.testLLM({ providers: [payload] });
+    llmTest.value = res;
+    applyLlmHealthResults(res.results || []);
+    toast(res.ok ? `端点 #${idx + 1} 测试通过` : `端点 #${idx + 1} 测试失败`);
+  } catch (e) {
+    llmTest.value = { ok: false, results: [], error: String(e.message || e).replace(/^\d+\s*/, "") };
+    toast(`端点 #${idx + 1} 测试失败`);
+  } finally {
+    provider.testing = false;
+    await nextTick();
+    suppressAutoSave = false;
+  }
+}
+
+async function load() {
+  clearTimeout(autoSaveTimer);
+  autoSaveTimer = null;
+  dirtyDuringSave = false;
+  loading.value = true;
+  suppressAutoSave = true;
+  try {
+    const s = await api.getSettings();
+    meta.value = { updated_at: s.updated_at };
+    form.base_url = s.llm?.base_url || "";
+    form.model = s.llm?.model || "";
+    form.protocol = normalizeLlmProtocol(s.llm?.protocol);
+    form.temperature = s.llm?.temperature ?? 0.3;
+    form.api_key = "";
+    form.key_ref = s.llm?.key_ref || "";
+    form.api_key_set = s.llm?.api_key_set;
+    llmMode.value = s.llm?.mode === "pool" ? "pool" : "single";
+    loadLlmProviders(s.llm?.providers || []);
+    form.fofa_key = "";
+    form.fofa_key_set = s.fofa?.key_set;
+    form.fofa_base_url = s.fofa?.base_url || "";
+    form.max_pages = s.fofa?.max_pages ?? 20;
+    form.page_size = s.fofa?.page_size ?? 100;
+    form.default_intent_mode = s.fofa?.default_intent_mode || "";
+    form.default_engine = s.defaults?.engine || "fofa";
+    form.available_engines = s.available_engines || [];
+    const engView = s.engines || {};
+    const nextEngines = {};
+    for (const meta of form.available_engines) {
+      const name = meta.name;
+      const cur = engView[name] || {};
+      nextEngines[name] = {
+        display_name: meta.display_name || cur.display_name || name,
+        key: "",
+        key_set: !!cur.key_set,
+        base_url: cur.base_url || "",
+      };
+    }
+    if (nextEngines.fofa && !nextEngines.fofa.key_set && s.fofa?.key_set) {
+      nextEngines.fofa.key_set = true;
+    }
+    if (nextEngines.fofa && !nextEngines.fofa.base_url && s.fofa?.base_url) {
+      nextEngines.fofa.base_url = s.fofa.base_url;
+    }
+    form.engines = nextEngines;
+    form.concurrency = s.defaults?.concurrency ?? 3;
+    form.deepen_cap = s.defaults?.deepen_cap ?? 2;
+    form.skip_score_threshold = s.defaults?.skip_score_threshold ?? -10;
+    form.worker_prompt_version = s.defaults?.worker_prompt_version || "legacy";
+    if (s.ui) {
+      uiPrefs.value = saveUiPrefs(prefsFromApi(s.ui));
+      await applyUi(uiPrefs.value);
+    }
+    autoSaveStatus.value = "idle";
+    autoSaveError.value = "";
+  } finally {
+    loading.value = false;
+    await nextTick();
+    suppressAutoSave = false;
+  }
+}
+
+function secretReady(value) {
+  // 密钥输入中途不自动提交（避免 "sk-" 半成品写进 DB）；留空=不覆盖
+  const v = String(value || "").trim();
+  return v.length >= 8;
+}
+
+function scheduleAutoSave() {
+  if (loading.value) return;
+  if (saving.value) {
+    // 飞行中改动（含 suppressAutoSave=true 的回写窗口）：标记脏，finally 再调度
+    dirtyDuringSave = true;
+    autoSaveStatus.value = "pending";
+    return;
+  }
+  if (suppressAutoSave) return;
+  autoSaveStatus.value = "pending";
+  autoSaveError.value = "";
+  clearTimeout(autoSaveTimer);
+  // 端点详情输入中拉长防抖，避免打字过程中频繁落库抢焦点/冲选中态
+  const typingPool = typeof document !== "undefined"
+    && !!document.activeElement?.closest?.(".provider-detail, .provider-fields, .llm-pool-pane .model-picker");
+  autoSaveTimer = setTimeout(() => {
+    save({ silent: true }).catch(() => {});
+  }, typingPool ? 2500 : 1200);
+}
+
+async function save({ silent = false } = {}) {
+  if (saving.value || loading.value) return;
+  // 配置不完整时：静默跳过自动保存，手动保存仍提示
+  try {
+    validateLlmProviders();
+  } catch (e) {
+    autoSaveStatus.value = "incomplete";
+    autoSaveError.value = String(e.message || e);
+    if (!silent) toast(autoSaveError.value);
+    return;
+  }
+
+  saving.value = true;
+  dirtyDuringSave = false;
+  autoSaveStatus.value = "saving";
+  autoSaveError.value = "";
+  const clearedKeyIndexes = [];
+  try {
+    const body = {
+      llm: {
+        mode: llmMode.value,
+        base_url: form.base_url,
+        model: form.model,
+        protocol: form.protocol,
+        temperature: Number(form.temperature),
+        providers: buildLlmProviders(),
+      },
+      fofa: {
+        max_pages: Number(form.max_pages),
+        page_size: Number(form.page_size),
+        default_intent_mode: form.default_intent_mode,
+      },
+      engines: {},
+      defaults: {
+        concurrency: Number(form.concurrency),
+        deepen_cap: Number(form.deepen_cap),
+        skip_score_threshold: Number(form.skip_score_threshold),
+        worker_prompt_version: form.worker_prompt_version,
+        engine: form.default_engine || "fofa",
+      },
+    };
+    if (secretReady(form.api_key)) body.llm.api_key = form.api_key.trim();
+    for (const [name, eng] of Object.entries(form.engines || {})) {
+      const patch = { base_url: eng.base_url || "" };
+      if (secretReady(eng.key)) patch.key = eng.key.trim();
+      body.engines[name] = patch;
+    }
+    const fofaEng = form.engines?.fofa;
+    if (fofaEng) {
+      body.fofa.base_url = fofaEng.base_url || "";
+      if (secretReady(fofaEng.key)) body.fofa.key = fofaEng.key.trim();
+    }
+    // 端点池密钥：半成品不提交，靠 key_ref 让后端保留原值
+    if (llmMode.value === "pool") {
+      body.llm.providers = body.llm.providers.map((provider, idx) => {
+        if (secretReady(provider.api_key)) {
+          clearedKeyIndexes.push(idx);
+          return provider;
+        }
+        return { ...provider, api_key: "" };
+      });
+    }
+
+    suppressAutoSave = true;
+    const s = await api.updateSettings(body);
+    meta.value = { updated_at: s.updated_at };
+    form.api_key = "";
+    form.fofa_key = "";
+    form.api_key_set = s.llm?.api_key_set;
+    form.key_ref = s.llm?.key_ref || "";
+    llmMode.value = s.llm?.mode === "pool" ? "pool" : "single";
+    form.protocol = normalizeLlmProtocol(s.llm?.protocol);
+    form.fofa_key_set = s.fofa?.key_set;
+    const engView = s.engines || {};
+    for (const name of Object.keys(form.engines || {})) {
+      const cur = engView[name] || {};
+      form.engines[name].key = "";
+      form.engines[name].key_set = !!cur.key_set || (name === "fofa" && !!s.fofa?.key_set);
+      form.engines[name].base_url = cur.base_url || (name === "fofa" ? (s.fofa?.base_url || "") : "") || form.engines[name].base_url || "";
+      if (cur.display_name) form.engines[name].display_name = cur.display_name;
+    }
+    form.default_engine = s.defaults?.engine || form.default_engine;
+    // 关键：禁止 loadLlmProviders 整表替换；就地合并，不强制改写选中索引（用户飞行中换端点不被抢回）
+    if (llmMode.value === "pool") {
+      mergeProvidersAfterSave(s.llm?.providers || [], clearedKeyIndexes);
+      if (form.llm_providers.length && selectedLlmProvider.value >= form.llm_providers.length) {
+        selectedLlmProvider.value = form.llm_providers.length - 1;
+      }
+    }
+    autoSaveStatus.value = dirtyDuringSave ? "pending" : "saved";
+    if (!silent) toast("系统配置已保存");
+  } catch (e) {
+    const msg = String(e.message || e).replace(/^\d+\s*/, "");
+    autoSaveStatus.value = "error";
+    autoSaveError.value = msg;
+    toast(msg);
+  } finally {
+    saving.value = false;
+    await nextTick();
+    suppressAutoSave = false;
+    if (dirtyDuringSave) {
+      dirtyDuringSave = false;
+      scheduleAutoSave();
+    }
+  }
+}
+
+watch([form, llmMode], () => scheduleAutoSave(), { deep: true });
+
+const autoSaveLabel = computed(() => {
+  if (autoSaveStatus.value === "pending") return "将自动保存…";
+  if (autoSaveStatus.value === "saving") return "自动保存中…";
+  if (autoSaveStatus.value === "saved") {
+    const t = meta.value.updated_at?.slice(11, 19) || "";
+    return t ? `已自动保存 ${t}` : "已自动保存";
+  }
+  if (autoSaveStatus.value === "incomplete") return autoSaveError.value || "完善配置后将自动保存";
+  if (autoSaveStatus.value === "error") return autoSaveError.value || "自动保存失败";
+  return "改动后约 1 秒自动保存";
+});
+
+const settingsTab = ref("appearance");
+const uiPrefs = ref(loadUiPrefs());
+const wallpaperBusy = ref(false);
+const wallpaperError = ref("");
+const wallpaperPreviewStyle = computed(() => {
+  const kind = uiPrefs.value.wallpaperKind;
+  const src = kind === "file"
+    ? (uiPrefs.value.wallpaperSrc || "/api/settings/ui/wallpaper")
+    : kind === "url"
+      ? (uiPrefs.value.wallpaperSrc || uiPrefs.value.wallpaperUrl || "")
+      : "";
+  if (!src || !/^https?:\/\//i.test(src) && !src.startsWith("/")) return {};
+  return { backgroundImage: `url(${JSON.stringify(src)})` };
+});
+let uiSaveTimer = null;
+
+async function syncUiToServer(prefs) {
+  const s = await api.updateSettings({ ui: prefsToApi(prefs) });
+  const next = saveUiPrefs(prefsFromApi(s.ui || prefs));
+  uiPrefs.value = next;
+  await applyUi(next);
+}
+
+async function persistUi(patch) {
+  uiPrefs.value = saveUiPrefs({ ...uiPrefs.value, ...patch });
+  await applyUi(uiPrefs.value);
+  clearTimeout(uiSaveTimer);
+  uiSaveTimer = setTimeout(() => {
+    syncUiToServer(uiPrefs.value).catch((e) => {
+      wallpaperError.value = String(e.message || e).replace(/^\d+\s*/, "");
+    });
+  }, 400);
+}
+function setAccentHue(h) {
+  persistUi({ accentHue: Number(h) });
+}
+function onCustomAccent(ev) {
+  const next = hexToHue(ev.target.value, uiPrefs.value.accentHue);
+  setAccentHue(next);
+}
+function setThemeMode(t) {
+  persistUi({ theme: t });
+}
+async function onWallpaperFile(ev) {
+  const file = ev.target.files?.[0];
+  ev.target.value = "";
+  if (!file) return;
+  wallpaperBusy.value = true;
+  wallpaperError.value = "";
+  try {
+    const blob = await compressImageFile(file);
+    const uploaded = new File([blob], "wallpaper.jpg", { type: "image/jpeg" });
+    const s = await api.uploadUiWallpaper(uploaded);
+    uiPrefs.value = saveUiPrefs(prefsFromApi(s.ui || {}));
+    await applyUi(uiPrefs.value);
+  } catch (e) {
+    wallpaperError.value = String(e.message || e).replace(/^\d+\s*/, "");
+  } finally {
+    wallpaperBusy.value = false;
+  }
+}
+async function applyWallpaperUrl() {
+  const url = (uiPrefs.value.wallpaperUrl || "").trim();
+  if (!url) {
+    await onClearWallpaper();
+    return;
+  }
+  if (!/^https?:\/\//i.test(url)) {
+    wallpaperError.value = "请填写 http(s) 图片地址";
+    return;
+  }
+  wallpaperError.value = "";
+  await persistUi({ wallpaperKind: "url", wallpaperUrl: url });
+}
+async function onClearWallpaper() {
+  wallpaperError.value = "";
+  try {
+    const s = await api.deleteUiWallpaper();
+    uiPrefs.value = saveUiPrefs(prefsFromApi(s.ui || { ...DEFAULTS }));
+  } catch {
+    uiPrefs.value = saveUiPrefs({ ...uiPrefs.value, wallpaperKind: "none", wallpaperUrl: "", wallpaperSrc: "" });
+  }
+  await applyUi(uiPrefs.value);
+}
+async function resetAppearance() {
+  wallpaperError.value = "";
+  try { await api.deleteUiWallpaper(); } catch { /* ignore */ }
+  const prefs = resetUiLocal();
+  await syncUiToServer(prefs);
+}
+
+const SETTINGS_TABS = [
+  { id: "appearance", label: "外观", hint: "颜色与背景" },
+  { id: "llm", label: "模型", hint: "LLM 通道" },
+  { id: "recon", label: "测绘", hint: "引擎与 Key" },
+  { id: "runtime", label: "调度", hint: "并发深挖" },
+  { id: "proxy", label: "代理", hint: "WAF 封禁换 IP" },
+  { id: "data", label: "数据", hint: "备份磁盘" },
+  { id: "update", label: "更新", hint: "版本检查" },
+];
+const visibleTabs = computed(() =>
+  SETTINGS_TABS.filter((t) => t.id !== "update" || updateState.supported)
+);
+
+function onUiChanged(e) {
+  if (e.detail) uiPrefs.value = { ...loadUiPrefs(), ...e.detail };
+}
+
+onMounted(async () => {
+  uiPrefs.value = loadUiPrefs();
+  window.addEventListener("ah-ui-changed", onUiChanged);
+  await load();
+  refreshProviderHealth().catch(() => {});
+  healthPoll = setInterval(() => refreshProviderHealth().catch(() => {}), 10000);
+  // 探测后端是否支持更新 API（原版不注册 → supported=false → 隐藏区块）
+  checkUpdate();
+  loadWorkdirStats();
+  loadBackupStats();
+});
+onUnmounted(() => {
+  window.removeEventListener("ah-ui-changed", onUiChanged);
+  clearTimeout(uiSaveTimer);
+  clearInterval(healthPoll);
+  clearInterval(restartPoll);
+  clearTimeout(autoSaveTimer);
+});
+
+async function loadBackupStats() {
+  backupLoading.value = true;
+  try {
+    backupStats.value = await api.backupStatus();
+  } catch (e) {
+    toast(String(e.message || e).replace(/^\d+\s*/, ""));
+  } finally {
+    backupLoading.value = false;
+  }
+}
+
+function pollBackupRestart() {
+  backupRestarting.value = true;
+  pollHealth();
+}
+
+async function exportBackup() {
+  backupBusy.value = "export";
+  try {
+    await api.downloadBackupExport(backupIncludeWork.value);
+    toast(backupIncludeWork.value ? "已开始下载（含工作目录）" : "已开始下载数据库备份");
+  } catch (e) {
+    toast(String(e.message || e).replace(/^\d+\s*/, ""));
+  } finally {
+    backupBusy.value = "";
+  }
+}
+
+async function snapshotNow() {
+  backupBusy.value = "snapshot";
+  try {
+    const r = await api.backupSnapshot();
+    toast(`已在服务器覆盖保存 ${r.name}（${r.human}）`);
+    await loadBackupStats();
+  } catch (e) {
+    toast(String(e.message || e).replace(/^\d+\s*/, ""));
+  } finally {
+    backupBusy.value = "";
+  }
+}
+
+async function downloadSnapshot(name) {
+  backupBusy.value = name;
+  try {
+    await api.downloadBackupSnapshot(name);
+  } catch (e) {
+    toast(String(e.message || e).replace(/^\d+\s*/, ""));
+  } finally {
+    backupBusy.value = "";
+  }
+}
+
+function onRestoreFile(ev) {
+  restoreFile.value = ev.target.files?.[0] || null;
+}
+
+async function restoreBackup() {
+  if (!restoreFile.value) {
+    toast("请先选择备份文件（.tar.gz）");
+    return;
+  }
+  if (!confirm("将覆盖当前数据库并重启服务。进行中的任务会中断。确定恢复？")) return;
+  backupBusy.value = "restore";
+  try {
+    const r = await api.restoreBackup(restoreFile.value, restoreIncludeWork.value);
+    toast(r.message || "已恢复");
+    if (r.restarted) pollBackupRestart();
+  } catch (e) {
+    toast(String(e.message || e).replace(/^\d+\s*/, ""));
+  } finally {
+    backupBusy.value = "";
+  }
+}
+
+async function loadWorkdirStats() {
+  workdirLoading.value = true;
+  try {
+    workdirStats.value = await api.workdirStats();
+    if (workdirStats.value) {
+      cleanupRetentionDays.value = workdirStats.value.retention_days || 7;
+    }
+  } catch (e) {
+    toast(String(e.message || e).replace(/^\d+\s*/, ""));
+  } finally {
+    workdirLoading.value = false;
+  }
+}
+
+async function runCleanup() {
+  const days = Number(cleanupRetentionDays.value);
+  if (!Number.isFinite(days) || days <= 0) {
+    toast("保留天数要大于 0，才会删除过期目录");
+    return;
+  }
+  if (!confirm(`将删除超过 ${days} 天没再写入的工作目录。正在挖掘的目标不会动。确定清理？`)) return;
+  workdirCleaning.value = true;
+  workdirResult.value = null;
+  try {
+    const res = await api.workdirCleanup(days);
+    workdirResult.value = res;
+    toast(`已清理 ${res.deleted_dirs} 个目录，释放 ${res.freed_human}`);
+    await loadWorkdirStats();
+  } catch (e) {
+    toast(String(e.message || e).replace(/^\d+\s*/, ""));
+  } finally {
+    workdirCleaning.value = false;
+  }
+}
+</script>
+
+<template>
+  <section class="view settings-view">
+    <header class="page-head">
+      <h2>系统配置</h2>
+      <p class="page-sub">
+        左侧切换分组。模型/测绘/调度约 1 秒自动保存；外观写入服务器，换浏览器也还在。
+        <span v-if="meta.updated_at" class="settings-updated">上次保存 {{ meta.updated_at?.slice(0, 19).replace("T", " ") }}</span>
+      </p>
+    </header>
+
+    <!-- 骨架屏：镜像真实的「摘要侧栏 + 配置块」两栏布局，与加载后的结构对齐（不再是一行“加载中…”）。 -->
+    <div v-if="loading" class="settings-layout settings-skeleton" aria-hidden="true">
+      <aside class="settings-summary skeleton-panel">
+        <div class="skeleton-block lg" style="height:16px;width:58%"></div>
+        <div class="skeleton-line" style="margin-top:16px"></div>
+        <div class="skeleton-line"></div>
+        <div class="skeleton-line"></div>
+        <div class="skeleton-line" style="width:68%"></div>
+      </aside>
+      <div class="settings-form">
+        <div v-for="i in 3" :key="i" class="settings-block skeleton-panel">
+          <div class="skeleton-block lg" style="height:15px;width:38%;margin-bottom:16px"></div>
+          <div class="skeleton-line"></div>
+          <div class="skeleton-line"></div>
+          <div class="skeleton-line" style="width:84%"></div>
+          <div class="skeleton-row" style="margin-top:14px">
+            <div class="skeleton-chip"></div>
+            <div class="skeleton-chip wide"></div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div v-else class="settings-layout">
+      <aside class="settings-summary" aria-label="设置分组">
+        <div class="settings-summary-head">
+          <span>SETTINGS</span>
+          <b>分组</b>
+        </div>
+        <nav class="settings-nav" aria-label="设置分组">
+          <button
+            v-for="tab in visibleTabs"
+            :key="tab.id"
+            type="button"
+            :class="{ active: settingsTab === tab.id }"
+            @click="settingsTab = tab.id"
+          >
+            {{ tab.label }}
+            <small>{{ tab.hint }}</small>
+          </button>
+        </nav>
+        <div class="settings-health">
+          <div>
+            <span>LLM</span>
+            <b>{{ llmMode === "pool" ? `${form.llm_providers.length} 个端点` : (form.model || "未设置模型") }}</b>
+          </div>
+          <i :class="{ on: llmMode === 'pool' ? form.llm_providers.some((p) => p.enabled !== false) : form.api_key_set }">
+            {{ llmMode === "pool" ? "pool" : (form.api_key_set ? "key set" : "no key") }}
+          </i>
+        </div>
+        <div class="settings-health">
+          <div>
+            <span>测绘</span>
+            <b>{{ form.default_engine || "fofa" }} · {{ form.max_pages }} 页</b>
+          </div>
+          <i :class="{ on: engineKeysSetCount > 0 }">{{ engineKeysSetCount > 0 ? `${engineKeysSetCount} key` : "no key" }}</i>
+        </div>
+        <p class="settings-note">任务创建时可覆盖模型与调度默认值。外观写入本实例数据库与数据卷。</p>
+      </aside>
+
+      <form class="form settings-form" novalidate @submit.prevent="save">
+        <fieldset v-show="settingsTab === 'appearance'" class="settings-block">
+          <legend>
+            <span>外观</span>
+            <small>主题色与背景保存在本实例服务器，换电脑也能带上</small>
+          </legend>
+          <div class="appearance-row">
+            <div class="create-field">
+              <span>明暗</span>
+              <div class="llm-mode-switch" role="radiogroup" aria-label="明暗主题">
+                <button type="button" :class="{ active: uiPrefs.theme === 'dark' }" @click="setThemeMode('dark')">暗色</button>
+                <button type="button" :class="{ active: uiPrefs.theme === 'light' }" @click="setThemeMode('light')">亮色</button>
+              </div>
+            </div>
+            <label>铺满方式
+              <select :value="uiPrefs.wallpaperFit" @change="persistUi({ wallpaperFit: $event.target.value })">
+                <option value="cover">铺满裁切</option>
+                <option value="contain">完整显示</option>
+              </select>
+            </label>
+          </div>
+          <div class="create-field full">
+            <span>主题色</span>
+            <div class="appearance-swatches" role="list">
+              <button
+                v-for="sw in ACCENT_PRESETS"
+                :key="sw.h"
+                type="button"
+                class="appearance-swatch"
+                :class="{ active: Number(uiPrefs.accentHue) === sw.h }"
+                :style="{ '--swatch-h': sw.h + 'deg' }"
+                :title="sw.name"
+                :aria-label="sw.name"
+                @click="setAccentHue(sw.h)"
+              ></button>
+              <input
+                type="color"
+                :value="hueToHex(uiPrefs.accentHue)"
+                aria-label="自定义主题色"
+                title="自定义"
+                @change="onCustomAccent"
+              />
+            </div>
+            <small class="muted">色相 {{ uiPrefs.accentHue }} · 按钮、选中态、焦点会跟着变</small>
+          </div>
+          <label class="full">色相
+            <input type="range" min="0" max="360" :value="uiPrefs.accentHue" @input="setAccentHue($event.target.value)" />
+          </label>
+          <label class="full">背景压暗 {{ Math.round(uiPrefs.wallpaperDim * 100) }}%
+            <input type="range" min="0.08" max="0.62" step="0.01" :value="uiPrefs.wallpaperDim" @input="persistUi({ wallpaperDim: Number($event.target.value) })" />
+            <small class="muted">往左拖图更清楚，往右拖字更好读</small>
+          </label>
+          <div class="appearance-drop">
+            <label class="full">背景图链接
+              <input v-model="uiPrefs.wallpaperUrl" placeholder="https://example.com/wallpaper.jpg" @keydown.enter.prevent="applyWallpaperUrl" />
+            </label>
+            <div class="appearance-actions">
+              <button type="button" @click="applyWallpaperUrl">使用链接</button>
+              <label class="mini-action" style="cursor:pointer">
+                上传图片
+                <input type="file" accept="image/*" hidden :disabled="wallpaperBusy" @change="onWallpaperFile" />
+              </label>
+              <button type="button" :disabled="uiPrefs.wallpaperKind === 'none'" @click="onClearWallpaper">去掉背景</button>
+              <button type="button" @click="resetAppearance">恢复默认外观</button>
+            </div>
+            <p v-if="wallpaperBusy" class="field-hint">正在压缩并保存图片…</p>
+            <p v-if="wallpaperError" class="field-hint" style="color:var(--danger)">{{ wallpaperError }}</p>
+            <div class="appearance-preview" :style="wallpaperPreviewStyle">
+              {{ uiPrefs.wallpaperKind === 'none' ? '当前没有自定义背景' : (uiPrefs.wallpaperKind === 'file' ? '已使用本机图片' : '使用网络图片') }}
+            </div>
+          </div>
+        </fieldset>
+
+        <fieldset v-show="settingsTab === 'llm'" class="settings-block">
+          <legend>
+            <span>AI / LLM</span>
+            <small>Worker、Reviewer、报告助手共用的默认模型通道</small>
+          </legend>
+          <div class="llm-mode-switch" role="tablist" aria-label="LLM 调用模式">
+            <button
+              type="button"
+              role="tab"
+              :aria-selected="llmMode === 'single'"
+              :class="{ active: llmMode === 'single' }"
+              @click="llmMode = 'single'; llmTest = null"
+            >单端点</button>
+            <button
+              type="button"
+              role="tab"
+              :aria-selected="llmMode === 'pool'"
+              :class="{ active: llmMode === 'pool' }"
+              @click="llmMode = 'pool'; llmTest = null"
+            >端点池</button>
+          </div>
+
+          <div v-if="llmMode === 'single'" class="settings-grid llm-config-pane">
+            <label class="full">base_url
+              <input v-model="form.base_url" required placeholder="https://api.deepseek.com/v1" @input="invalidateSingleKey" />
+              <small class="muted">Coding Plan 填官方根地址即可（智谱 <code>…/api/coding/paas/v4</code>、方舟 <code>…/api/coding/v3</code>），不要再加 /v1。无版本号的根会自动补 /v1。</small>
+            </label>
+            <label class="full">api_key
+              <input v-model="form.api_key" type="password"
+                :required="!form.key_ref"
+                :placeholder="form.api_key_set ? '已配置，留空不修改' : 'sk-...'" />
+            </label>
+            <label>协议
+              <select v-model="form.protocol" @change="invalidateSingleKey">
+                <option value="auto">自动判断</option>
+                <option value="openai_chat">OpenAI Chat</option>
+                <option value="anthropic_messages">Anthropic Messages</option>
+              </select>
+            </label>
+            <label>temperature
+              <input v-model="form.temperature" type="number" step="0.1" min="0" max="2" />
+            </label>
+            <label class="full">模型名
+              <LlmModelPicker
+                v-model="form.model"
+                :models="singleModels"
+                :loading="singleModelsLoading"
+                :error="singleModelsError"
+                required
+                @refresh="loadSingleModels"
+              />
+            </label>
+            <div class="settings-test full">
+              <button type="button" :disabled="testingLlm" @click="testSingleLlm">
+                {{ testingLlm ? "测试中…" : "测试连接" }}
+              </button>
+            </div>
+          </div>
+
+          <div v-else class="llm-pool-pane">
+            <div class="llm-pool-toolbar">
+              <div>
+                <b>端点列表</b>
+                <span>{{ form.llm_providers.length }} 个</span>
+              </div>
+              <button type="button" @click="addLlmProvider">+ 添加端点</button>
+            </div>
+
+            <div v-if="!form.llm_providers.length" class="provider-empty">
+              <span>端点池为空</span>
+              <button type="button" @click="addLlmProvider">+ 添加端点</button>
+            </div>
+
+            <div v-else class="provider-selector" role="listbox" aria-label="LLM 端点列表">
+              <button
+                v-for="(provider, idx) in form.llm_providers"
+                :key="provider._uid || idx"
+                type="button"
+                role="option"
+                :aria-selected="selectedLlmProvider === idx"
+                class="provider-selector-row"
+                :class="[{ active: selectedLlmProvider === idx, disabled: provider.enabled === false }, `health-${providerHealthClass(provider)}`]"
+                @click="selectedLlmProvider = idx"
+              >
+                <span class="provider-dot" :class="providerHealthClass(provider)"></span>
+                <b>{{ provider.name || `llm-${idx + 1}` }}</b>
+                <small>{{ provider.model || "未设置模型" }}</small>
+                <em>{{ provider.protocol === "auto" ? "Auto" : provider.protocol === "anthropic_messages" ? "Anthropic" : "OpenAI" }}</em>
+                <i>权重 {{ provider.weight || 1 }}</i>
+              </button>
+            </div>
+
+            <div v-if="selectedLlm" class="provider-detail">
+              <div class="provider-detail-head">
+                <div>
+                  <span>端点 {{ selectedLlmProvider + 1 }}</span>
+                  <strong class="provider-health" :class="providerHealthClass(selectedLlm)" :title="providerHealthTitle(selectedLlm)">
+                    {{ providerHealthText(selectedLlm) }}
+                  </strong>
+                </div>
+                <div class="provider-head-actions">
+                  <button type="button" title="上移" aria-label="上移端点" :disabled="selectedLlmProvider === 0" @click="moveLlmProvider(selectedLlmProvider, -1)">↑</button>
+                  <button type="button" title="下移" aria-label="下移端点" :disabled="selectedLlmProvider === form.llm_providers.length - 1" @click="moveLlmProvider(selectedLlmProvider, 1)">↓</button>
+                  <label class="provider-enabled">
+                    <input v-model="selectedLlm.enabled" type="checkbox" />
+                    启用
+                  </label>
+                  <button type="button" class="danger" title="删除" aria-label="删除端点" @click="removeLlmProvider(selectedLlmProvider)">×</button>
+                </div>
+              </div>
+
+              <div class="provider-fields">
+                <label>名称 <input v-model="selectedLlm.name" placeholder="primary" /></label>
+                <label>协议
+                  <select v-model="selectedLlm.protocol" @change="invalidateProviderKey(selectedLlm)">
+                    <option value="auto">自动判断</option>
+                    <option value="openai_chat">OpenAI Chat</option>
+                    <option value="anthropic_messages">Anthropic Messages</option>
+                  </select>
+                </label>
+                <label class="wide">base_url
+                  <input v-model="selectedLlm.base_url" placeholder="https://api.deepseek.com/v1" @input="invalidateProviderKey(selectedLlm)" />
+                  <small class="muted">Coding Plan 填官方根地址，不要再加 /v1。</small>
+                </label>
+                <label>api_key
+                  <input
+                    v-model="selectedLlm.api_key"
+                    type="password"
+                    :required="!selectedLlm.key_ref"
+                    :placeholder="selectedLlm.api_key_set ? `${selectedLlm.api_key_masked}，留空不修改` : 'sk-...'"
+                  />
+                </label>
+                <label>temperature
+                  <input v-model="selectedLlm.temperature" type="number" step="0.1" min="0" max="2" />
+                </label>
+                <label>权重
+                  <input v-model="selectedLlm.weight" type="number" min="1" max="100" />
+                </label>
+                <label class="wide">模型名
+                  <LlmModelPicker
+                    v-model="selectedLlm.model"
+                    :models="selectedLlm.models"
+                    :loading="selectedLlm.modelsLoading"
+                    :error="selectedLlm.modelsError"
+                    required
+                    @refresh="loadProviderModels(selectedLlmProvider)"
+                  />
+                </label>
+                <div class="provider-test wide">
+                  <button type="button" :disabled="selectedLlm.testing" @click="testLlmProvider(selectedLlmProvider)">
+                    {{ selectedLlm.testing ? "测试中…" : "测试当前端点" }}
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div v-if="llmTest" class="settings-test-result" :class="{ ok: llmTest.ok }">
+            <div class="settings-test-head">
+              <b>{{ llmTest.ok ? "LLM 可用" : "LLM 不可用" }}</b>
+              <button type="button" class="mini-action" @click="copyLlmTest()">复制错误信息</button>
+            </div>
+            <p v-if="llmTest.error">{{ llmTest.error }}</p>
+            <pre v-if="!llmTest.ok && (llmTest.error_copy || llmTest.error)" class="settings-test-raw">{{ llmTest.error_copy || llmTest.error }}</pre>
+            <ul v-if="llmTest.results?.length">
+              <li v-for="item in llmTest.results" :key="`${item.name}-${item.base_url}`" :class="{ ok: item.ok }">
+                <div class="settings-test-item-head">
+                  <strong>{{ item.ok ? "通过" : "失败" }} · {{ item.name || "single" }}</strong>
+                  <button type="button" class="mini-action" @click="copyLlmTest(item)">复制</button>
+                </div>
+                <small>{{ resultText(item) }}</small>
+                <pre v-if="!item.ok && (item.error_copy || item.error)" class="settings-test-raw">{{ item.error_copy || item.error }}</pre>
+              </li>
+            </ul>
+          </div>
+        </fieldset>
+
+        <fieldset v-show="settingsTab === 'recon'" class="settings-block">
+          <legend>
+            <span>资产测绘</span>
+            <small>多引擎搜集默认；创建任务可选引擎，Key 在此统一配置</small>
+          </legend>
+          <div class="settings-grid">
+            <label class="full">默认搜索引擎
+              <select v-model="form.default_engine">
+                <option v-for="eng in form.available_engines" :key="eng.name" :value="eng.name">
+                  {{ eng.display_name || eng.name }}
+                </option>
+              </select>
+            </label>
+            <p class="field-hint full">新建任务「搜索引擎」留空时使用此项。任务里仍可临时换引擎。</p>
+            <label>默认最大页数 <input v-model="form.max_pages" type="number" min="1" /></label>
+            <label>每页条数 <input v-model="form.page_size" type="number" min="1" /></label>
+            <label class="full">默认搜集方式
+              <select v-model="form.default_intent_mode">
+                <option value="">自动判断</option>
+                <option value="syntax">查询语法（当前引擎官网语法）</option>
+                <option value="intent">自然语言意图</option>
+              </select>
+            </label>
+            <p class="field-hint full">分页与搜集方式对当前选用的测绘引擎生效。</p>
+          </div>
+
+          <div class="engine-keys">
+            <h4 class="engine-keys-title">各引擎 API Key</h4>
+            <p class="field-hint">按需配置；未配 Key 的引擎在任务里选中时无法搜资产。密钥留空表示不修改。</p>
+            <div v-for="eng in form.available_engines" :key="eng.name" class="engine-key-card">
+              <div class="engine-key-head">
+                <strong>{{ form.engines[eng.name]?.display_name || eng.display_name || eng.name }}</strong>
+                <i :class="{ on: form.engines[eng.name]?.key_set }">
+                  {{ form.engines[eng.name]?.key_set ? "已配置" : "未配置" }}
+                </i>
+              </div>
+              <div class="settings-grid" v-if="form.engines[eng.name]">
+                <label class="full">API Key
+                  <input v-model="form.engines[eng.name].key" type="password"
+                    :placeholder="form.engines[eng.name]?.key_set ? '已配置，留空不修改' : (
+                      eng.name === 'censys' ? 'Platform Personal Access Token，或旧版 API_ID:SECRET' :
+                      eng.name === 'quake' ? 'X-QuakeToken（个人中心 API Token）' :
+                      ((eng.display_name || eng.name) + ' API Key')
+                    )" />
+                </label>
+                <p v-if="eng.name === 'censys'" class="field-hint full">
+                  新账号用 Censys Platform 的 Personal Access Token；仅旧 Legacy Search 才填 <code>API_ID:SECRET</code>。
+                </p>
+                <label class="full">API 端点（可选）
+                  <input v-model="form.engines[eng.name].base_url"
+                    :placeholder="eng.name === 'fofa' ? 'https://fofa.info' : '留空用官方默认'" />
+                </label>
+              </div>
+            </div>
+          </div>
+        </fieldset>
+
+        <fieldset v-show="settingsTab === 'runtime'" class="settings-block">
+          <legend>
+            <span>调度默认</span>
+            <small>新任务创建时的保守默认值</small>
+          </legend>
+          <div class="settings-grid">
+            <label>新建任务默认并发 <input v-model="form.concurrency" type="number" min="1" max="32" /></label>
+            <label>新建任务默认深挖次数 <input v-model="form.deepen_cap" type="number" min="0" max="10" /></label>
+            <p class="field-hint full">同一目标被打回深挖的最大次数（人工 + AI 审核 + 自动 deepen_lead 合计）。默认 2，范围 0–10；0 表示关闭回炉。</p>
+            <label>低分跳过阈值
+              <input v-model="form.skip_score_threshold" type="number" step="1" />
+            </label>
+            <p class="field-hint full">Collector 评分低于此值的目标直接跳过，避免 worker 消耗在垃圾资产上。</p>
+          </div>
+        </fieldset>
+
+        <fieldset v-show="settingsTab === 'proxy'" class="settings-block">
+          <legend>
+            <span>代理池</span>
+            <small>挖洞流量出口。关闭或没有可用代理时继续直连，不影响现有任务。</small>
+          </legend>
+          <ProxyPoolEditor />
+        </fieldset>
+
+        <fieldset v-show="settingsTab === 'data'" class="settings-block">
+          <legend>
+            <span>数据备份</span>
+            <small>导出/导入是主路径。SQLite 在线备份打一致快照，不要直接拷正在写的库文件。</small>
+          </legend>
+          <div v-if="backupRestarting" class="update-restarting">
+            <div class="update-spinner"></div>
+            <p>备份已写入，服务正在重启…</p>
+          </div>
+          <div v-else-if="backupLoading && !backupStats" class="field-hint">加载中…</div>
+          <div v-else-if="backupStats" class="workdir-panel">
+            <div class="workdir-stats-grid">
+              <div class="workdir-stat-item">
+                <span class="workdir-stat-label">数据库</span>
+                <b class="workdir-stat-value">{{ backupStats.db_human }}</b>
+              </div>
+              <div class="workdir-stat-item">
+                <span class="workdir-stat-label">库盘剩余</span>
+                <b class="workdir-stat-value small">{{ backupStats.disk?.free_human || '未知' }}</b>
+              </div>
+              <div class="workdir-stat-item">
+                <span class="workdir-stat-label">本地快照</span>
+                <b class="workdir-stat-value small">{{ backupStats.snapshots_human || '0 B' }}</b>
+              </div>
+              <div class="workdir-stat-item">
+                <span class="workdir-stat-label">自动备份</span>
+                <b class="workdir-stat-value" :class="backupStats.auto_backup?.enabled ? 'on' : 'off'">
+                  {{ backupStats.auto_backup?.enabled ? `每 ${backupStats.auto_backup.interval_hours} 小时` : '已关闭' }}
+                </b>
+              </div>
+              <div class="workdir-stat-item">
+                <span class="workdir-stat-label">工作目录</span>
+                <b class="workdir-stat-value small">{{ backupStats.work?.human || '0 B' }}</b>
+              </div>
+            </div>
+            <p class="field-hint">
+              日常请点「下载备份」把文件带走。服务器只覆盖留 1 份 gzip 快照（再打会覆盖），不自动堆多份。
+              当前库盘剩余 {{ backupStats.disk?.free_human || '未知' }}，快照占用 {{ backupStats.snapshots_human || '0 B' }}。
+              工作目录可选打包，上限 {{ backupStats.work?.max_human }}。
+            </p>
+            <div class="workdir-cleanup-controls">
+              <label class="workdir-dryrun-label">
+                <input type="checkbox" v-model="backupIncludeWork" />
+                下载时同时打包工作目录
+              </label>
+              <button type="button" :disabled="!!backupBusy" @click="exportBackup">
+                {{ backupBusy === 'export' ? '打包中…' : '下载备份' }}
+              </button>
+              <button type="button" :disabled="!!backupBusy" @click="snapshotNow">
+                {{ backupBusy === 'snapshot' ? '覆盖中…' : '在服务器覆盖留一份' }}
+              </button>
+              <button type="button" :disabled="backupLoading" @click="loadBackupStats">刷新</button>
+            </div>
+            <details v-if="backupStats.snapshots?.length" class="workdir-result-details">
+              <summary>服务器快照（{{ backupStats.snapshots.length }}）</summary>
+              <div class="workdir-result-list">
+                <div v-for="s in backupStats.snapshots" :key="s.name" class="workdir-result-item">
+                  <span class="workdir-item-name">{{ s.name }}</span>
+                  <span class="workdir-item-size">{{ s.human }}</span>
+                  <button type="button" class="mini-action" :disabled="!!backupBusy" @click="downloadSnapshot(s.name)">下载</button>
+                </div>
+              </div>
+            </details>
+            <div class="backup-restore">
+              <p class="field-hint">从备份恢复会覆盖当前数据库并重启。请先下载一份当前备份。</p>
+              <div class="workdir-cleanup-controls">
+                <input type="file" accept=".gz,.tgz,.tar.gz,application/gzip" @change="onRestoreFile" />
+                <label class="workdir-dryrun-label">
+                  <input type="checkbox" v-model="restoreIncludeWork" />
+                  同时恢复工作目录
+                </label>
+                <button type="button" class="danger" :disabled="!!backupBusy || !restoreFile" @click="restoreBackup">
+                  {{ backupBusy === 'restore' ? '恢复中…' : '恢复并重启' }}
+                </button>
+              </div>
+            </div>
+          </div>
+        </fieldset>
+
+        <fieldset v-show="settingsTab === 'data'" class="settings-block">
+          <legend>
+            <span>工作目录管理</span>
+            <small>Worker / Escalate 等 agent 产生的临时文件磁盘占用与清理</small>
+          </legend>
+          <div v-if="workdirLoading" class="field-hint">加载中…</div>
+          <div v-else-if="workdirStats" class="workdir-panel">
+            <div class="workdir-stats-grid">
+              <div class="workdir-stat-item">
+                <span class="workdir-stat-label">磁盘占用</span>
+                <b class="workdir-stat-value">{{ workdirStats.total_size_human }}</b>
+              </div>
+              <div class="workdir-stat-item">
+                <span class="workdir-stat-label">目标目录数</span>
+                <b class="workdir-stat-value">{{ workdirStats.total_dirs }}</b>
+              </div>
+              <div class="workdir-stat-item">
+                <span class="workdir-stat-label">自动清理</span>
+                <b class="workdir-stat-value" :class="workdirStats.auto_cleanup_enabled ? 'on' : 'off'">
+                  {{ workdirStats.auto_cleanup_enabled ? `已开启（${workdirStats.retention_days}天）` : '已关闭' }}
+                </b>
+              </div>
+              <div v-if="workdirStats.oldest_dir" class="workdir-stat-item">
+                <span class="workdir-stat-label">最旧目录</span>
+                <b class="workdir-stat-value small">{{ workdirStats.oldest_dir.age_days }}天前</b>
+              </div>
+            </div>
+            <p class="field-hint">工作路径：<code>{{ workdirStats.work_root }}</code></p>
+            <p v-if="workdirStats.auto_cleanup_enabled" class="field-hint">
+              系统将自动清理超过 {{ workdirStats.retention_days }} 天未修改的工作目录（间隔由 WORKER_WORK_CLEANUP_INTERVAL_HOURS 控制，默认 6 小时）。
+            </p>
+
+            <div class="workdir-cleanup-controls">
+              <label class="workdir-retention-label">
+                清理保留天数
+                <input v-model.number="cleanupRetentionDays" type="number" min="0" max="365" />
+              </label>
+              <button type="button" :disabled="workdirCleaning" @click="runCleanup">
+                {{ workdirCleaning ? "清理中…" : "清理过期目录" }}
+              </button>
+              <button type="button" @click="loadWorkdirStats" :disabled="workdirLoading">
+                刷新统计
+              </button>
+            </div>
+
+            <div v-if="workdirResult" class="workdir-result">
+              <div class="workdir-result-summary">
+                <span>清理完成</span>
+                <span>扫描 {{ workdirResult.scanned_dirs }} 个目录</span>
+                <span>删除 {{ workdirResult.deleted_dirs }} 个</span>
+                <span v-if="workdirResult.failed_dirs">失败 {{ workdirResult.failed_dirs }} 个</span>
+                <span>释放 {{ workdirResult.freed_human }}</span>
+              </div>
+              <details v-if="workdirResult.deleted?.length" class="workdir-result-details">
+                <summary>已清理目录（{{ workdirResult.deleted.length }}）</summary>
+                <div class="workdir-result-list">
+                  <div v-for="d in workdirResult.deleted.slice(0, 100)" :key="d.name" class="workdir-result-item">
+                    <span class="workdir-item-name">{{ d.name }}</span>
+                    <span class="workdir-item-age">{{ d.age_days }}天</span>
+                    <span class="workdir-item-size">{{ d.size_human }}</span>
+                  </div>
+                  <p v-if="workdirResult.deleted.length > 100" class="field-hint">
+                    仅显示前 100 条，共 {{ workdirResult.deleted.length }} 条
+                  </p>
+                </div>
+              </details>
+              <details v-if="workdirResult.failed?.length" class="workdir-result-details">
+                <summary>失败目录（{{ workdirResult.failed.length }}）</summary>
+                <div class="workdir-result-list">
+                  <div v-for="d in workdirResult.failed" :key="d.name" class="workdir-result-item">
+                    <span class="workdir-item-name">{{ d.name }}</span>
+                    <span class="workdir-item-age">{{ d.error }}</span>
+                  </div>
+                </div>
+              </details>
+            </div>
+          </div>
+        </fieldset>
+
+        <fieldset v-if="updateState.supported" v-show="settingsTab === 'update'" class="settings-block update-section">
+          <legend>
+            <span>版本更新</span>
+            <small>检查 GitHub 最新代码；git 部署可一键热更，镜像部署给出手动指引</small>
+          </legend>
+          <div v-if="updateState.restarting" class="update-restarting">
+            <div class="update-spinner"></div>
+            <p>服务正在重启，自动重连中…</p>
+          </div>
+          <div v-else class="update-body">
+            <button type="button" class="btn-check" @click="checkUpdate" :disabled="updateState.checking">
+              {{ updateState.checking ? "检测中…" : "检查更新" }}
+            </button>
+            <div v-if="updateState.error" class="update-error">{{ updateState.error }}</div>
+            <div v-if="updateState.info?.error" class="update-error">
+              <p>{{ updateState.info.error }}</p>
+              <p v-if="updateState.info.hint" class="update-hint">{{ updateState.info.hint }}</p>
+              <a
+                class="update-link"
+                :href="updateState.info.releases_url || 'https://github.com/StanleyNull/AutoHunter'"
+                target="_blank"
+                rel="noopener"
+              >打开 GitHub 仓库 / Releases</a>
+            </div>
+            <div v-if="updateState.info?.update_available" class="update-info">
+              <div class="update-version">
+                <span class="version-old">{{ updateState.info.current_commit }}</span>
+                <span class="version-arrow">→</span>
+                <span class="version-new">{{ updateState.info.latest_commit }}</span>
+                <span class="update-badge">落后 {{ updateState.info.commits_behind }} 个提交</span>
+              </div>
+              <div class="update-latest-msg">{{ updateState.info.latest_message }}</div>
+              <details class="update-files">
+                <summary>变更文件 ({{ updateState.info.changed_files?.length || 0 }})</summary>
+                <ul>
+                  <li v-for="f in updateState.info.changed_files" :key="f">{{ f }}</li>
+                </ul>
+              </details>
+              <div v-if="updateState.info.hot_updateable" class="update-actions">
+                <button type="button" class="primary" @click="runUpdate" :disabled="updateState.updating">
+                  {{ updateState.updating ? "更新中…" : "一键更新并重启" }}
+                </button>
+                <span class="update-hint">仅后端代码变更，可热更新（git pull + 自动重启）</span>
+              </div>
+              <div v-else class="update-actions rebuild">
+                <p class="update-warn">⚠ 本次更新包含前端/Dockerfile 变更，需在服务器执行完整重建：</p>
+                <code class="rebuild-cmd">{{ updateState.info.rebuild_command || 'git pull && docker compose up -d --build' }}</code>
+              </div>
+            </div>
+            <div v-else-if="updateState.info && !updateState.info.update_available && !updateState.info.error" class="update-uptodate">
+              ✓ 已是最新版本（{{ updateState.info.current_commit }}）
+            </div>
+          </div>
+        </fieldset>
+
+        <div v-show="['llm','recon','runtime'].includes(settingsTab)" class="settings-actions">
+          <button type="submit" class="primary" :disabled="saving">
+            {{ saving ? "保存中…" : "立即保存" }}
+          </button>
+          <span class="autosave-status" :class="autoSaveStatus">{{ autoSaveLabel }}</span>
+          <span class="settings-actions-hint">密钥留空不覆盖；输入完成后会随自动保存写入。</span>
+        </div>
+      </form>
+    </div>
+
+    <div v-if="toastMsg" class="toast settings-toast">{{ toastMsg }}</div>
+  </section>
+</template>
