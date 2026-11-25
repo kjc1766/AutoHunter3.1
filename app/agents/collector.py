@@ -201,19 +201,42 @@ def _url_dedup_key(url: str) -> str:
     实测问题：南开测试 106 条 target 里只有 64 个不同 URL，同一 URL 重复入队 7 次；
     测试5 66 条里只有 42 个不同 URL。根因是入队只按 host 去重，
     同一 host 下的同路径被反复写入，白白跑完 4 次受阻流程。
+
+    归一化规则（保守，宁可少合并也不误杀）：
+      - 去协议、fragment
+      - **只把 host 小写，路径保持原样**：Linux 下 /X 与 /x 是不同资源
+      - 去默认端口（http:80 / https:443）
+      - 去末尾斜杠（根路径除外）
     """
     if not url:
         return ""
-    u = url.strip().lower()
-    # 去掉协议差异、默认端口、末尾斜杠、fragment
-    u = u.replace("https://", "").replace("http://", "")
+    u = url.strip()
+    low = u.lower()
+    if low.startswith("https://"):
+        u, scheme = u[8:], "https"
+    elif low.startswith("http://"):
+        u, scheme = u[7:], "http"
+    else:
+        scheme = ""
     u = u.split("#", 1)[0]
-    if u.endswith("/") and u.count("/") > 1:
-        u = u.rstrip("/")
-    u = u.replace(":80/", "/").replace(":443/", "/")
-    if u.endswith(":80") or u.endswith(":443"):
-        u = u.rsplit(":", 1)[0]
-    return u
+    # 只对 authority（host[:port]）做小写，路径大小写敏感必须保留
+    slash = u.find("/")
+    if slash < 0:
+        authority, path = u, ""
+    else:
+        authority, path = u[:slash], u[slash:]
+    authority = authority.lower()
+    # 去默认端口
+    if scheme == "https" and authority.endswith(":443"):
+        authority = authority[:-4]
+    elif scheme == "http" and authority.endswith(":80"):
+        authority = authority[:-3]
+    # 根路径 "/" 视同无路径；其余路径统一去尾斜杠
+    if path in ("", "/"):
+        path = ""
+    elif path.endswith("/"):
+        path = path.rstrip("/")
+    return authority + path
 
 
 async def _existing_urls(session: AsyncSession, task_id: str) -> set[str]:
@@ -410,8 +433,10 @@ async def refill(session: AsyncSession, task: Task, low_watermark: int = 5,
             url = item.get("url") or ""
             # host 级去重：同一 host 只入队一次（原本逻辑）
             # URL 级去重：拦住「同 host 下同路径重复入队」（3.1 新增，实测能砍掉 36-40% 冗余）
-            ukey = _url_dedup_key(url or _ensure_url(host) if host else "")
-            if not host or host in seen:
+            if not host:
+                continue
+            ukey = _url_dedup_key(url or _ensure_url(host))
+            if host in seen:
                 continue
             if ukey and ukey in seen_urls:
                 continue

@@ -169,7 +169,7 @@ def harvest_chunks(
             break
         # 总时长保护：2 核机器上顺序下载 400 个 chunk，
         # 若某些请求各自超时 12s，最坏会拖到 80 分钟，拖垮整个任务。
-        # 超过 HARVEST_CHUNK_BUDGET 秒就停，把已拿到的先返回（接口通常集中在前几十个）。
+        # 超过 CHUNK_BUDGET_SEC 秒就停，把已拿到的先返回（接口通常集中在前几十个）。
         if (_t.monotonic() - t0) > CHUNK_BUDGET_SEC:
             errors.append({"chunk": "(remaining)", "error": f"总时长超 {CHUNK_BUDGET_SEC}s，提前结束"})
             break
