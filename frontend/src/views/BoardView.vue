@@ -1298,6 +1298,124 @@ async function exportEdusrcAll() {
   }
 }
 
+// ===== 批量导出：AI 未采纳 / 同类聚合（与待复审的「复制全部 Markdown / 导出 .md」对齐）=====
+// 两者都按「当前视图筛选后的全部数据」导出，不受已加载分页限制。
+async function fetchAllArchivedReports() {
+  // archivedList 单页上限 200，需翻页拉全量（搜索词一并带上，保证与界面所见一致）。
+  return fetchPagedFindingList((offset) => api.archivedList(props.id, searchText.value?.trim() || undefined, {
+    limit: 200,
+    offset,
+  }));
+}
+
+async function fetchAllClusteredReports() {
+  // clusteredList 支持分页（单页上限 500），这里翻页拉全量，避免只导出前 500 组。
+  // 每组展开成 primary + variants，一并发出去（判定与状态不变，只是导出）。
+  const out = [];
+  let offset = 0;
+  for (;;) {
+    const res = await api.clusteredList(props.id, searchText.value?.trim() || undefined, {
+      only_multi: clusteredOnlyMulti.value ? 1 : 0,
+      limit: 500,
+      offset,
+    });
+    const rows = Array.isArray(res) ? res : (res.items || []);
+    for (const c of rows) {
+      if (c.primary) out.push(c.primary);
+      for (const v of (c.variants || [])) out.push(v);
+    }
+    const hasMore = !Array.isArray(res) && !!res.has_more;
+    if (!rows.length || !hasMore) break;
+    offset += rows.length;
+    await new Promise((resolve) => requestAnimationFrame(resolve));
+  }
+  return out;
+}
+
+async function copyArchivedAll() {
+  if (bulkWorking.value) return;
+  bulkWorking.value = true;
+  try {
+    toast("正在生成全部 Markdown...");
+    const reports = await fetchAllArchivedReports();
+    if (!reports.length) {
+      toast("没有 AI 未采纳记录");
+      return;
+    }
+    await copyText(joinReportMarkdown(reports));
+    toast(`已复制 ${reports.length} 条 AI 未采纳报告`);
+  } catch {
+    toast("复制失败，请使用导出按钮");
+  } finally {
+    bulkWorking.value = false;
+  }
+}
+
+async function exportArchivedAll() {
+  if (bulkWorking.value) return;
+  bulkWorking.value = true;
+  try {
+    toast("正在生成 Markdown 文件...");
+    const reports = await fetchAllArchivedReports();
+    if (!reports.length) {
+      toast("没有 AI 未采纳记录");
+      return;
+    }
+    downloadNamedFile(
+      `autohunter-${props.id.slice(0, 8)}-archived.md`,
+      joinReportMarkdown(reports),
+      "text/markdown",
+    );
+    toast(`已导出 ${reports.length} 条 AI 未采纳报告`);
+  } catch (e) {
+    toast(`导出失败：${e.message || e}`);
+  } finally {
+    bulkWorking.value = false;
+  }
+}
+
+async function copyClusteredAll() {
+  if (bulkWorking.value) return;
+  bulkWorking.value = true;
+  try {
+    toast("正在生成全部 Markdown...");
+    const reports = await fetchAllClusteredReports();
+    if (!reports.length) {
+      toast("没有同类聚合记录");
+      return;
+    }
+    await copyText(joinReportMarkdown(reports));
+    toast(`已复制 ${reports.length} 条聚合报告`);
+  } catch {
+    toast("复制失败，请使用导出按钮");
+  } finally {
+    bulkWorking.value = false;
+  }
+}
+
+async function exportClusteredAll() {
+  if (bulkWorking.value) return;
+  bulkWorking.value = true;
+  try {
+    toast("正在生成 Markdown 文件...");
+    const reports = await fetchAllClusteredReports();
+    if (!reports.length) {
+      toast("没有同类聚合记录");
+      return;
+    }
+    downloadNamedFile(
+      `autohunter-${props.id.slice(0, 8)}-clustered.md`,
+      joinReportMarkdown(reports),
+      "text/markdown",
+    );
+    toast(`已导出 ${reports.length} 条聚合报告`);
+  } catch (e) {
+    toast(`导出失败：${e.message || e}`);
+  } finally {
+    bulkWorking.value = false;
+  }
+}
+
 async function copyReviewAll() {
   if (bulkWorking.value) return;
   bulkWorking.value = true;
@@ -2256,6 +2374,19 @@ function parseEventTs(ts) {
           <input type="checkbox" v-model="clusteredOnlyMulti" @change="loadClustered" />
           只看有变体的
         </label>
+        <span class="grow"></span>
+        <button
+          type="button"
+          title="复制当前筛选下全部聚合报告（含各变体，完整 Markdown 含证据链）"
+          @click="copyClusteredAll"
+          :disabled="!clusteredItems.length || bulkWorking"
+        >复制全部 Markdown</button>
+        <button
+          type="button"
+          title="导出当前筛选下全部聚合报告为 .md"
+          @click="exportClusteredAll"
+          :disabled="!clusteredItems.length || bulkWorking"
+        >导出 .md</button>
       </div>
       <div v-if="!clusteredItems.length" class="empty">暂无记录（跑完一轮后同一个洞的多次描述会聚到这里）</div>
       <div v-for="(c, ci) in clusteredItems" :key="c.primary?.id || ci" class="cluster-card">
@@ -2308,6 +2439,19 @@ function parseEventTs(ts) {
         <small>AI 判为非漏洞或深挖未升级的洞，保留在此防误杀，可点开查看、必要时「恢复到复审」</small>
         <small v-if="archivedWriteCount" class="write-hint">有 {{ archivedWriteCount }} 条写/删类已置顶，优先人工看，别让真洞埋在这里</small>
         <small v-if="archivedItems.length" class="muted">已加载 {{ archivedItems.length }} 条{{ archivedHasMore ? "，还有更多" : "" }}</small>
+        <span class="grow"></span>
+        <button
+          type="button"
+          title="复制全部 AI 未采纳报告（完整 Markdown，含证据链；不受分页影响）"
+          @click="copyArchivedAll"
+          :disabled="!archivedItems.length || bulkWorking"
+        >复制全部 Markdown</button>
+        <button
+          type="button"
+          title="导出全部 AI 未采纳报告为 .md"
+          @click="exportArchivedAll"
+          :disabled="!archivedItems.length || bulkWorking"
+        >导出 .md</button>
       </div>
       <div v-if="!archivedItems.length" class="empty">
         暂无 AI 未采纳的漏洞（AI 审核判「非漏洞」或「深挖未升级」的洞会沉淀到这里，防止误杀）
