@@ -6,6 +6,7 @@
 """
 from __future__ import annotations
 
+import json
 import os
 import re
 import selectors
@@ -88,6 +89,44 @@ def _confirm_pause(exc: NeedsConfirm) -> dict[str, Any]:
         "error": f"疑似不可逆操作，先停一下：{exc.reason}",
         "guidance": _REFLECT_GUIDANCE,
     }
+
+
+def _hdr_str(v: Any) -> str:
+    """把请求头值强制转成字符串。
+
+    实测：LLM 偶尔把 header 值传成嵌套结构，例如
+      {"Authorization": {"scheme": "Bearer", "token": "..."}}
+    或 {"Accept": ["text/html", "application/json"]}。
+    httpx 在构造请求时会对 header 值做 "; ".join(...)，遇到 dict 就抛
+      TypeError: sequence item 2: expected str instance, dict found
+    整个 http_request 调用直接失败，白烧一轮。
+
+    这里做「保真降级」：
+      - 标量 -> str
+      - list/tuple -> 用 ", " 连接（这是 HTTP 多值头的标准写法）
+      - dict -> 取 common 的单值形态（token/value/scheme 组合），否则 JSON 序列化
+    """
+    if isinstance(v, str):
+        return v
+    if v is None:
+        return ""
+    if isinstance(v, (int, float, bool)):
+        return str(v)
+    if isinstance(v, (list, tuple)):
+        return ", ".join(_hdr_str(x) for x in v)
+    if isinstance(v, dict):
+        # Bearer 类结构：{"scheme": "Bearer", "token": "xx"} -> "Bearer xx"
+        scheme = v.get("scheme") or v.get("type")
+        token = v.get("token") or v.get("value") or v.get("credentials")
+        if scheme and token:
+            return f"{scheme} {token}"
+        if token:
+            return _hdr_str(token)
+        try:
+            return json.dumps(v, ensure_ascii=False, separators=(",", ":"))
+        except Exception:
+            return str(v)
+    return str(v)
 
 
 def _truncate(text: str, limit: Optional[int] = None) -> str:
@@ -1031,12 +1070,12 @@ class ToolExecutor:
             merged: dict[str, str] = {}
             applied: list[str] = []
             for k, v in self._session_headers.items():
-                merged[k] = v
+                merged[k] = _hdr_str(v)
             if headers:
                 for k, v in headers.items():
                     if k.lower() == "cookie":
                         continue
-                    merged[k] = v
+                    merged[k] = _hdr_str(v)
             host = _host_from_url(url) or self._target_host()
             jar_cookies = self._cookies_for_host(host, overlay)
             if jar_cookies:
