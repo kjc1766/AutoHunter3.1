@@ -189,6 +189,94 @@ BLOCK_BACKOFF_BASE_SEC = float(os.environ.get("BLOCK_BACKOFF_BASE_SEC", "600"))
 BLOCK_BACKOFF_MAX_SEC = float(os.environ.get("BLOCK_BACKOFF_MAX_SEC", "21600"))
 # 受阻累计到这么多次仍未解除，才真正收敛为 dead（避免永远空耗预算）
 BLOCK_MAX_ATTEMPTS = max(1, int(os.environ.get("BLOCK_MAX_ATTEMPTS", "4")))
+
+# ---- 排队超时收敛：防止队列无限积压 ----
+# 实测旧机排队 977 个（最久 10 天）、新机 724 个（最久 6.8 天）。
+# 低优先级目标永远轮不上，却一直占队列、干扰每轮派发扫描。
+# 默认 168 小时（7 天）：只收敛「7 天前入队、从未开工」的目标，很保守。
+# 设 0 可完全关闭。
+QUEUE_EXPIRE_HOURS = float(os.environ.get("QUEUE_EXPIRE_HOURS", "168"))
+QUEUE_EXPIRE_BATCH = max(50, int(os.environ.get("QUEUE_EXPIRE_BATCH", "300")))
+
+# ---- 永久性受阻判定：这类受阻等多久都不会解除，直接判 dead，不进退避队列 ----
+# 实测（1386 个有受阻原因的 target）：
+#   含「登录」81%、含「账号」58%、含「CAS」46%、含「密码」24%
+#   —— 绝大多数是「缺有效账号/会话」，不是临时性故障。
+# 而退避策略是 10min→30min→90min→270min，合计 400 分钟纯等待，
+# 实测单个目标 377 分钟里只有 12 分钟在干活，等:干 ≈ 27:1。
+# 所以：明确写「缺账号/缺会话/需要登录态」的，第一次受阻就收敛，不浪费 6.7 小时。
+BLOCK_PERMANENT_PATTERNS = (
+    # 缺凭证类（最常见）
+    "需要有效", "缺少有效", "需要任一有效", "无有效", "缺真实", "缺少合法",
+    "需要真实", "需要任一", "缺少任一", "未提供有效", "缺少可用的",
+    "需要特定角色", "缺有效",
+    # 需要登录态才能继续
+    "需要有效登录态", "需要登录态", "登录态前置", "登录后才可达",
+    "必须持有真实", "需要有效会话", "需要有效后台", "需要有效账号",
+    "需有效登录态", "需有效后台", "需有效账号",
+    # 认证体系前置（进不去就是进不去）
+    "需真实飞书", "需要真实飞书", "需要真实 Google", "需要真实 ByteDance",
+    "仅接受", "强制要求有效", "强制校验飞书",
+    # 结构性阻断（非临时）——实测这批漏判最多
+    "站内所有自助路径均证伪", "无法在站内自助满足", "不可在站内自助满足",
+    "无法自助获得", "站内无法自助", "自助注册已关闭", "注册已关闭",
+    "结构性不可自助满足", "结构性无法", "在结构上无法", "结构性不可",
+    "站内无法", "无法自助", "自助路径", "均证伪",
+    "注册/找回", "找回密码", "注册通道", "无自助注册",
+    # 网络/合规类永久阻断
+    "内网可达", "仅内网", "IP 白名单", "ICP 非合规", "备案拦截",
+    "全路径接管", "全站被",
+    # CDN/WAF 层统一拦截（实测第 2 大类，等再久也不会自己放开）
+    "统一拦截", "统一 403", "统一 nginx", "全路径被", "被 CDN", "CDN deny",
+    "deny-all", "边缘完全遮蔽", "全部解析 IP 均", "Connection refused",
+    "端口无监听", "服务下线", "拒绝连接", "catch-all 拦截",
+    "源站 DNS", "DNS FAIL", "不监听", "反爬挑战", "人机挑战", "BSLuBan",
+    "TLB 边缘", "PCDN", "纯 CDN", "CDN 边缘节点", "边缘节点", "Access Denied",
+    "回源 503", "回源失败", "geo WAF", "ICP 640B",
+    "No valid",  # 英文否定前缀（No valid session 等）
+    "无真实", "不成立", "未能实证",
+    "需外部前置条件", "外部前置", "未验证的解锁向量",
+)
+
+# 兜底规则：一段话里同时出现「登录/会话」+「无法/缺少/需要」，也视为永久受阻。
+# 实测剩余漏判里 23% 含「登录」、15% 含「会话」，但措辞各不相同
+# （"无法取得有效后台会话" / "缺少一个真实 backend 账号"），
+# 纯关键词枚举必然有遗漏，用「否定词 + 认证词」组合兜住。
+_BLOCK_AUTH_WORDS = ("登录", "会话", "session", "账号", "认证", "凭据", "sso", "cas", "验证码")
+_BLOCK_NEGATIVE_WORDS = ("无法", "缺少", "需要", "需真实", "未能", "不可", "没有", "不足")
+# 这些词出现说明是「临时性」问题，即使命中上面的模式也不判永久
+BLOCK_TRANSIENT_PATTERNS = (
+    "超时", "timeout", "502", "503", "504", "限流", "rate limit",
+    "稍后重试", "临时", "预热", "启动中", "维护中",
+)
+
+
+def is_permanent_block(reason: str, unblock: str = "") -> bool:
+    """判断受阻原因是否属于「等多久都不会解除」的永久性阻断。
+
+    典型永久：缺 SSO/CAS 账号、需要有效登录态、注册已关闭、仅内网可达。
+    典型临时：502/504、限流、服务预热中 —— 这些继续走退避重试。
+    """
+    text = f"{reason or ''} {unblock or ''}".strip()
+    if not text:
+        return False
+    low = text.lower()
+    perm_hits = sum(1 for p in BLOCK_PERMANENT_PATTERNS if p in text)
+    transient_hit = any(t in low for t in BLOCK_TRANSIENT_PATTERNS)
+
+    # 永久信号很强（命中 2+ 个，如「端口不监听」+「CDN 边缘节点」）时，
+    # 文中的「超时」只是描述现象，不代表可恢复 —— 永久优先。
+    if perm_hits >= 2:
+        return True
+    # 只有单个永久词时，临时信号可以否决（避免"502"+"需要有效"这种偶然共现误判）
+    if transient_hit:
+        return False
+    if perm_hits == 1:
+        return True
+    # 组合兜底：同时出现认证词 + 否定词 → 缺凭证，等再久也不会出现
+    has_auth = any(w in low for w in _BLOCK_AUTH_WORDS)
+    has_neg = any(w in text for w in _BLOCK_NEGATIVE_WORDS)
+    return has_auth and has_neg
 QUEUE_DISPATCH_CANDIDATE_LIMIT = max(30, int(os.environ.get("QUEUE_DISPATCH_CANDIDATE_LIMIT", "120")))
 # 同款簇冷却只需要「在途 + 最近死/跳过」，禁止每次派发把任务全表 dead/skipped 灌进内存。
 QUEUE_CLUSTER_HISTORY_LIMIT = max(100, int(os.environ.get("QUEUE_CLUSTER_HISTORY_LIMIT", "800")))
@@ -686,10 +774,14 @@ class TaskRunner:
                     logger.warning("TaskRunner[%s] event log dropped kind=%s: %s",
                                    self.task_id[:8], kind, str(exc)[:120])
                     break
-                # 锁冲突按 0.05/0.1/0.2/0.4s 退避；其它异常原样抛出（可能是真 bug）
+                # 锁冲突按 0.2/0.6/1.8/5.4s 指数退避（合计约 8s）。
+                # 原先是 0.05/0.1/0.2/0.4s（合计 0.75s），太短：busy_timeout 提到 20s 后，
+                # sqlite 自己会等 20s 才报 busy，此时再短退避没意义；
+                # 但如果多个写者同时超时，需要给彼此让出时间，所以退避要够长。
+                # 其它异常原样抛出（可能是真 bug）
                 if not locked:
                     raise
-                await asyncio.sleep(0.05 * (2 ** attempt))
+                await asyncio.sleep(0.2 * (3 ** attempt))
         # ts 统一用带 UTC 标识的 ISO 字符串（…+00:00），前端 new Date 才能正确转本地时区。
         await bus.publish(self.task_id, {"agent": agent, "kind": kind, "level": level,
                                          "message": message, "ts": _now_iso(), **payload})
@@ -927,6 +1019,7 @@ class TaskRunner:
             await self._reclaim_stale(session)
             await self._maybe_sweep_orphan_superseded(session)
             await self._revive_blocked(session)
+            await self._expire_stale_queued(session)
             effective_cap = min(task.concurrency, WORKER_MAX_CONCURRENCY)
             free = effective_cap - len(self._active_workers)
             for _ in range(max(0, free)):
@@ -1020,6 +1113,7 @@ class TaskRunner:
             await self._reclaim_stale(session)
             await self._maybe_sweep_orphan_superseded(session)
             await self._revive_blocked(session)
+            await self._expire_stale_queued(session)
             # task.concurrency 是用户在 UI 配的期望并发；worker 实际并发还受全局信号量
             # WORKER_MAX_CONCURRENCY 封顶。这里按两者取小来决定本轮 spawn 多少，避免多起
             # 的协程只是白白阻塞在 worker_sem.acquire()（表现为"配了 N 并发但没那么多在跑"）。
@@ -1195,6 +1289,50 @@ class TaskRunner:
                     level="warn", target_id=tid, block_count=bcnt,
                 )
         return len(revived)
+
+    async def _expire_stale_queued(self, session: AsyncSession) -> int:
+        """把排队太久的目标收敛为 skipped，防止队列无限积压。
+
+        背景：实测旧机排队 977 个、新机 724 个，最久等了 10 天。
+        _pop_queued 按 priority_score 降序派发，低分目标永远轮不上，
+        但 keep 在队列里既占内存、又让每轮 refill/派发都扫描一遍。
+
+        策略（保守，默认只处理 7 天以上的）：
+          - 只处理 queued 状态、从未开工过的（retry_count=0 且 block_count=0）
+          - 排队超过 QUEUE_EXPIRE_HOURS（默认 168h=7天）→ skipped，理由写明
+          - 每轮最多处理 QUEUE_EXPIRE_BATCH 个，避免一次大事务锁库
+          - 设 QUEUE_EXPIRE_HOURS=0 可关闭
+        被收敛的目标可在任务详情里看到，需要时手动重排。
+        """
+        if QUEUE_EXPIRE_HOURS <= 0:
+            return 0
+        cutoff = utc_naive_now() - timedelta(hours=QUEUE_EXPIRE_HOURS)
+        rows = (await session.execute(
+            select(Target).where(
+                Target.task_id == self.task_id,
+                Target.status == "queued",
+                Target.created_at < cutoff,
+                Target.retry_count == 0,
+            ).limit(QUEUE_EXPIRE_BATCH)
+        )).scalars().all()
+        if not rows:
+            return 0
+        hosts = []
+        for t in rows:
+            t.status = "skipped"
+            t.verdict = "skip_queue_expired"
+            t.dead_reason = (
+                f"[排队超 {QUEUE_EXPIRE_HOURS}h 自动挂起] 从未开工，"
+                f"为避免队列无限积压自动收敛；如需挖掘请手动重排"
+            )[:300]
+            hosts.append(t.host)
+        await session.commit()
+        await self._log(
+            session, "orchestrator", "queue_expired",
+            f"{len(rows)} 个目标排队超 {QUEUE_EXPIRE_HOURS} 小时，自动收敛为 skipped",
+            level="info", count=len(rows), sample=",".join(hosts[:5]),
+        )
+        return len(rows)
 
     async def _pop_queued(self, session: AsyncSession) -> Target | None:
         # 按 EduSRC 优先级评分降序派发：高价值目标先挖。
@@ -3162,17 +3300,26 @@ class TaskRunner:
             elif verdict == Verdict.blocked.value:
                 # 受阻 ≠ 没洞。进 waiting 挂起，不消耗 retry_count、不进 dead。
                 # 靠 unblock_condition 记录「满足什么能重开」，由周期巡检决定何时放回 queued。
-                tgt.status = "waiting"
+                _blk_reason = (result.get("block_reason") or summary_text or "未说明受阻原因")[:1000]
+                _unblk = (result.get("unblock_condition") or "")[:1000]
+                tgt.block_reason = _blk_reason
+                tgt.unblock_condition = _unblk
                 tgt.assigned_worker = ""
                 tgt.heartbeat_at = None
                 tgt.last_error = ""
-                tgt.dead_reason = ""
-                tgt.block_reason = (result.get("block_reason") or summary_text or "未说明受阻原因")[:1000]
-                tgt.unblock_condition = (result.get("unblock_condition") or "")[:1000]
-                tgt.blocked_at = utc_naive_now()
-                tgt.block_count = (tgt.block_count or 0) + 1
-                target_blocked_info = (tgt.host, tgt.block_reason[:150], tgt.unblock_condition[:150],
-                                       tgt.block_count)
+                # 永久性受阻（缺账号/缺会话/注册关闭/仅内网）第一次就收敛，
+                # 不再走 10min→30min→90min→270min 的 6.7 小时退避空等。
+                if is_permanent_block(_blk_reason, _unblk):
+                    tgt.status = "dead"
+                    tgt.dead_reason = f"[永久受阻，需外部条件] {_blk_reason[:200]}"[:300]
+                    tgt.block_count = (tgt.block_count or 0) + 1
+                else:
+                    tgt.status = "waiting"
+                    tgt.dead_reason = ""
+                    tgt.blocked_at = utc_naive_now()
+                    tgt.block_count = (tgt.block_count or 0) + 1
+                    target_blocked_info = (tgt.host, tgt.block_reason[:150], tgt.unblock_condition[:150],
+                                           tgt.block_count)
             elif verdict == Verdict.inconclusive.value:
                 # 做了但说不清：按普通重试换角度再来一次，而不是直接判死。
                 if tgt.retry_count < MAX_RETRY:
