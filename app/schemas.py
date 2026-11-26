@@ -159,3 +159,8 @@ class Review(BaseModel):
     reviewer_notes: str = Field("", description="审核备注：判断依据")
     # deepen 时必填：明确告诉 worker 这一轮要把什么利用链打穿
     deepen_directive: str = Field("", description="深挖指令（verdict=deepen 时必填）：具体要证明/打穿什么")
+    # 同一漏洞被「未证实」打回的累计次数（跨轮次计入 DB，这里只作运行时载体）。
+    # reviewer 在熔断逻辑里会读写这个字段；Pydantic BaseModel 默认禁止赋值未声明字段，
+    # 不声明会抛 `"Review" object has no field "uncertain_attempts"`。
+    # 实测该异常导致 8888-8963 任务累计 2612 次审核失败、所有 finding 卡在 pending_review。
+    uncertain_attempts: int = Field(0, description="未证实累计次数（熔断用，运行时字段）")
