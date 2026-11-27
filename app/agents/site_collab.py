@@ -175,6 +175,194 @@ def route_reason(route: SiteRoute) -> str:
     return f"[单站协作] {route.label} · {route.focus[:120]}"
 
 
+# ============================================================================
+# 高危端点提权（Risk-Endpoint Promotion）
+# ============================================================================
+# 背景（2026-11-27 实测）：
+#   同一个站 jxzy.fjcpc.edu.cn，两个任务结论相反 ——
+#     · 测试10：种子 URL 直接是 /meol/common/ckeditor/officeconverter.jsp
+#               → 9 轮打出 SSRF（docx 外带）
+#     · ssrf测试2：87 条路线全部从首页派生，含 officeconverter 仅 1 条
+#                且落在 config.js 扫描上下文 → 0 洞
+#
+#   根因不是 bug，是「攻击面清点太泛化」：5 条主题路线的 url 全是同一个
+#   tgt.url，focus 只是文字描述，worker 自己决定打哪个接口，
+#   高危端点（converter/proxy/upload/actuator...）被淹没在几百个普通接口里。
+#
+#   线上 8434 个目标里命中高危词的数量：
+#     actuator 578 / swagger 428 / upload 277 / druid 248 / api-docs 219
+#     nacos 207 / xml 191 / download 106 / converter 31 / callback 26
+#
+# 本模块提供打分与选点，供 orchestrator 在 spawn 主题路线时决定
+# 「哪些端点值得单独派一条定向 worker」。
+
+# 按漏洞类型分组的高危特征。权重越大越优先。
+# 注意：只匹配**路径段和参数名**，不匹配正文，避免误伤。
+RISK_PATTERNS: tuple[tuple[str, tuple[str, ...], float], ...] = (
+    # SSRF / 开放重定向：这类端点天然会去请求外部资源
+    # 分档：converter/proxy 这类「后端主动取外部资源」的最强（真 SSRF），
+    #        redirect/forward 只是跳转，价值次之（开放重定向，通常低危）。
+    ("ssrf", (
+        "converter", "officeconverter", "proxy", "fetchurl", "fetchurl",
+        "fetch", "webhook", "callback", "urlscheme", "ssrf",
+    ), 50.0),
+    ("redirect", (
+        "redirect", "forward", "finallyredirect", "redirector",
+    ), 22.0),
+    # 文件读取/下载/上传：任意文件读取、路径穿越、上传 getshell 的高发区
+    ("file", (
+        "download", "downfile", "getfile", "readfile", "openfile", "filepath",
+        "filename", "fileid", "attach", "attachment", "upload", "importfile",
+        "exportfile", "preview", "docpreview", "showfile", "loadfile",
+    ), 35.0),
+    # 注入 / RCE / 模板
+    ("inject", (
+        "query", "search", "select", "execute", "exec", "cmd", "shell",
+        "eval", "template", "freemarker", "velocity", "ognl", "spel",
+        "deserialize", "readobject",
+    ), 30.0),
+    # 未授权配置/管理面：泄露凭据、数据库、配置，常直接构成高危
+    ("unauth", (
+        "actuator", "nacos", "druid", "swagger", "api-docs", "openapi",
+        "console", "admin", "manage", "manager", "monitor", "env", "heapdump",
+    ), 30.0),
+    # XXE：XML/SOAP/RPC 解析入口
+    ("xxe", (
+        "soap", "rpc", "xmlrpc", "parsexml", "xmlparser", "uploadxml",
+    ), 25.0),
+    # 越权/IDOR：带对象 id 的读写接口
+    ("idor", (
+        "getuser", "userinfo", "getorder", "getdetail", "viewdetail",
+        "updateuser", "updatepwd", "resetpwd", "changepwd",
+    ), 20.0),
+)
+
+# URL 参数名里出现这些，说明该端点会把「外部资源」交给后端处理
+RISK_PARAM_HINTS: tuple[str, ...] = (
+    "url", "uri", "target", "dest", "redirect", "return", "next", "goto",
+    "src", "source", "link", "callback", "host", "domain", "path", "file",
+    "filename", "filepath", "load", "fetch", "proxy", "imageurl", "imgurl",
+)
+
+
+def _split_multi_url(url: str) -> list[str]:
+    """把「一行塞多个路径」的脏 URL 拆成独立候选。
+
+    实测数据里存在这种格式（worker 把多个探测目标合并成一行写入）：
+      'https://h.cn/meol/common/ckeditor/config.js /plugins/file/dialogs/file.js
+       /plugins/officeconverter/dialogs/officeconverter.js'
+
+    直接对该行打分会让 'officeconverter' 这个目录名假命中，
+    但真实可打的端点其实是每个独立路径。这里按空白切分后补全成绝对 URL。
+    """
+    parts = url.split()
+    if len(parts) <= 1:
+        return [url]
+    base = parts[0]
+    try:
+        p0 = urlparse(base)
+        root = f"{p0.scheme}://{p0.netloc}"
+    except Exception:
+        return [url]
+    out = []
+    for seg in parts:
+        if not seg:
+            continue
+        if seg.startswith("http"):
+            out.append(seg)
+        elif seg.startswith("/"):
+            out.append(root + seg)
+        else:
+            # 非路径段（如纯说明文字）丢弃
+            continue
+    return out or [url]
+
+
+def score_endpoint_risk(url: str) -> tuple[float, str]:
+    """给一个 URL 打高危分，返回 (分数, 命中的风险类型)。
+
+    - 分数用于排序与是否提权；0 表示普通端点。
+    - 只看 URL 路径与 query 参数名，不看正文，保证可复现、无副作用。
+    - 一条 URL 若含多个路径，取其中得分最高的那个。
+
+    打分规则：
+      · 路径命中某个风险组 → 加该组基础分
+      · URL 自带的 query 参数名命中 RISK_PARAM_HINTS → 额外 +25（SSRF/文件读取最直接的信号）
+      · 多个组命中可叠加，但封顶 100
+    """
+    if not url:
+        return 0.0, ""
+    best_score = 0.0
+    best_kinds = ""
+    for single in _split_multi_url(url):
+        score, kinds = _score_single(single)
+        if score > best_score:
+            best_score, best_kinds = score, kinds
+    return best_score, best_kinds
+
+
+def _score_single(url: str) -> tuple[float, str]:
+    try:
+        p = urlparse(url)
+    except Exception:
+        return 0.0, ""
+    path = (p.path or "").lower()
+    query = (p.query or "").lower()
+
+    total = 0.0
+    kinds: list[str] = []
+    for kind, words, weight in RISK_PATTERNS:
+        if any(w in path for w in words):
+            total += weight
+            kinds.append(kind)
+
+    param_hit = False
+    for name in RISK_PARAM_HINTS:
+        if f"{name}=" in query or f"{name}&" in query or query.endswith(name):
+            param_hit = True
+            break
+    if param_hit:
+        total += 25.0
+        if "ssrf" not in kinds:
+            kinds.append("ssrf")
+
+    return min(total, 100.0), ",".join(kinds)
+
+
+# 只有达到这个分才值得单独派一条定向 worker。
+# 实测：达标的基本是真高危面；调低会让队列暴涨。
+RISK_PROMOTE_THRESHOLD = 30.0
+# 每个站点最多提权几条，防止一个 CMS 的几十个同质端点击穿队列
+RISK_PROMOTE_PER_HOST = 3
+
+
+def pick_risk_endpoints(urls: list[str], limit: int = RISK_PROMOTE_PER_HOST) -> list[str]:
+    """从一批 URL 里挑出最值得定向深挖的若干条。
+
+    - 先把「一行多路径」的脏 URL 拆开，每个路径单独评估（这是实测踩到的坑）
+    - 分数低于阈值的丢弃
+    - 同一 netloc+path 只保留一条（去掉 query 差异造成的重复）
+    - 按分数降序取前 limit 条
+    """
+    scored: dict[str, tuple[float, str]] = {}
+    for raw in urls:
+        if not raw:
+            continue
+        for u in _split_multi_url(raw):
+            score, kinds = score_endpoint_risk(u)
+            if score < RISK_PROMOTE_THRESHOLD:
+                continue
+            try:
+                pp = urlparse(u)
+                key = f"{pp.netloc}{pp.path}".lower()
+            except Exception:
+                key = u.lower()
+            if key not in scored or scored[key][0] < score:
+                scored[key] = (score, u)
+    ranked = sorted(scored.values(), key=lambda x: -x[0])
+    return [u for _, u in ranked[:limit]]
+
+
 # 用户在自由文本里给出的登录凭据/登录态的识别特征。
 # 命中任一即认为用户「明确提供了可登录的凭据」，触发强制登录后深入引导。
 _CRED_SIGNALS: tuple[re.Pattern, ...] = (

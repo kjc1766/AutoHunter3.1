@@ -198,6 +198,14 @@ BLOCK_MAX_ATTEMPTS = max(1, int(os.environ.get("BLOCK_MAX_ATTEMPTS", "4")))
 QUEUE_EXPIRE_HOURS = float(os.environ.get("QUEUE_EXPIRE_HOURS", "168"))
 QUEUE_EXPIRE_BATCH = max(50, int(os.environ.get("QUEUE_EXPIRE_BATCH", "300")))
 
+# ---- 高危端点提权 ----
+# 实测：同一站点，直接喂高危端点（officeconverter.jsp）9 轮出 SSRF，
+# 而 87 条泛化路线 0 洞 —— 说明高危端点需要单独定向，不能混在泛化路线里碰运气。
+# 默认开启；每站最多 3 条，防止同质端点刷爆队列。
+RISK_PROMOTE_ENABLED = os.environ.get("RISK_PROMOTE_ENABLED", "1") not in ("0", "false", "no")
+# 提权目标的基线优先级：site_focus 是 155，这里用 200 保证排在泛化路线之前
+RISK_PROMOTE_PRIORITY = float(os.environ.get("RISK_PROMOTE_PRIORITY", "200"))
+
 # ---- 永久性受阻判定：这类受阻等多久都不会解除，直接判 dead，不进退避队列 ----
 # 实测（1386 个有受阻原因的 target）：
 #   含「登录」81%、含「账号」58%、含「CAS」46%、含「密码」24%
@@ -2324,6 +2332,84 @@ class TaskRunner:
                 continue
             existing_sources.add(troute.source)
             added += 1
+
+        # ---- 高危端点提权 ----
+        # 5 条主题路线的 url 都是同一个 tgt.url，focus 只是文字描述，
+        # worker 自己决定打哪个接口 → converter/upload/actuator 这类高危端点
+        # 会被淹没在几百个普通接口里（实测 ssrf测试2 87 条路线 0 洞，
+        # 而直接喂 officeconverter.jsp 的测试10 9 轮就出 SSRF）。
+        #
+        # 这里把侦察阶段（site_map/site_js）已确认存在的高危端点，
+        # 单独提权成 site_focus 目标并给高优先级，让它排在泛化路线之前跑。
+        try:
+            added += await self._promote_risk_endpoints(session, task_id, tgt, existing_sources)
+        except Exception as exc:
+            logger.warning("TaskRunner[%s] risk promotion failed: %s", self.task_id[:8], exc)
+
+        return added
+
+    async def _promote_risk_endpoints(
+        self,
+        session: AsyncSession,
+        task_id: str,
+        tgt: Target,
+        existing_sources: set[str],
+    ) -> int:
+        """把本 host 已发现的高危端点提权为定向 worker，返回新增条数。
+
+        数据来源：同 host 已有 target 的 url（侦察路线爬到的）+
+        本 target 自己的 url。用 site_collab.pick_risk_endpoints 选点，
+        每站最多 RISK_PROMOTE_PER_HOST 条，避免同质端点刷爆队列。
+
+        幂等：已存在同名 source（site_focus_risk_N）则跳过。
+        开关：RISK_PROMOTE_ENABLED=0 可整体关闭。
+        """
+        if not RISK_PROMOTE_ENABLED:
+            return 0
+        from app.agents import site_collab as _sc
+
+        rows = (await session.execute(
+            select(Target.url).where(Target.task_id == task_id, Target.host == tgt.host)
+        )).all()
+        urls = [str(r[0]) for r in rows if r[0]]
+        if tgt.url and tgt.url not in urls:
+            urls.append(str(tgt.url))
+
+        picked = _sc.pick_risk_endpoints(urls, limit=_sc.RISK_PROMOTE_PER_HOST)
+        if not picked:
+            return 0
+
+        added = 0
+        for idx, risk_url in enumerate(picked):
+            src = f"site_focus_risk{idx}"
+            if src in existing_sources:
+                continue
+            score, kinds = _sc.score_endpoint_risk(risk_url)
+            try:
+                async with session.begin_nested():
+                    session.add(Target(
+                        task_id=task_id,
+                        url=risk_url,
+                        host=tgt.host,
+                        source=src,
+                        status="queued",
+                        # 高于所有主题路线（最高 site_focus=155），确保优先派发
+                        priority_score=RISK_PROMOTE_PRIORITY + score,
+                        priority_reason=(
+                            f"[高危端点提权] 风险类型={kinds or 'unknown'} "
+                            f"分数={score:.0f}；该端点命中 "
+                            f"SSRF/文件/注入/未授权 的典型特征，优先定向验证"
+                        )[:400],
+                        leaked_creds=tgt.leaked_creds,
+                        auth_context=tgt.auth_context,
+                    ))
+            except IntegrityError:
+                continue
+            existing_sources.add(src)
+            added += 1
+        if added:
+            logger.info("TaskRunner[%s] 提权 %d 个高危端点 host=%s",
+                        self.task_id[:8], added, tgt.host)
         return added
 
     async def _run_worker(self, task_id: str, target_id: str, url: str,
