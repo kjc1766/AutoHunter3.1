@@ -653,6 +653,12 @@ async def _fofa_collect(
     if engine is None:
         return 0
 
+    # URL 级去重集合（本轮已入队/已存在的 URL 归一化 key）。
+    # 实测 bug：第 972 行用了 seen_urls 但本函数从未定义，导致每次 refill
+    # 都抛 NameError: name 'seen_urls' is not defined，整个 tick 失败、
+    # 目标一个都入不了队（任务卡在 idle）。
+    seen_urls: set[str] = await _existing_urls(session, task.id)
+
     key = defaults["key"]
     if not key:
         return 0

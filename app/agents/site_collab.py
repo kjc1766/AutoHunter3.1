@@ -336,10 +336,82 @@ RISK_PROMOTE_THRESHOLD = 30.0
 RISK_PROMOTE_PER_HOST = 3
 
 
+# 真实可打端点必须具备的后缀（或路径段特征）。
+# 实测反例（提权后 31 个目标全 dead、0 洞）：
+#   http://404.58.com/swagger-ui.html,/v2/api-docs,/status,/api/,/login
+#   http://aiboss.58.com/upload,          ← 末尾逗号，是候选列表不是端点
+#   http://anqing.58.com/druid            ← 只有目录名
+# 这些命中关键词但打不动，必须过滤。
+_ENDPOINT_SUFFIXES: tuple[str, ...] = (
+    ".jsp", ".do", ".action", ".aspx", ".ashx", ".asp", ".php", ".php3",
+    ".cgi", ".pl", ".py", ".rb", ".json", ".xml", ".html", ".htm", ".shtml",
+    ".psp", ".jspx", ".xhtml", ".wsdl", ".svc", ".ashx",
+)
+# 明显的 API 段（没有后缀但确实是接口）
+_API_SEGMENT_HINTS: tuple[str, ...] = (
+    "/api/", "/v1/", "/v2/", "/v3/", "/rest/", "/graphql", "/rpc/",
+    "/service/", "/services/", "/actuator/", "/druid/", "/swagger",
+    "/api-docs", "/openapi",
+    # 认证/SSO 类真实端点（无后缀但是完整路径）
+    "/sso", "/saml2/", "/oauth", "/oidc", "/cas/", "/login",
+)
+
+
+def p_query_cut(url: str) -> bool:
+    """query 是否残缺（以 '=' 或 '&' 结尾，是参数占位符不是真实 URL）。"""
+    raw = (url or "").strip()
+    if "?" not in raw:
+        return False
+    return raw.endswith("=") or raw.endswith("&")
+
+
+def is_actionable_endpoint(url: str) -> bool:
+    """判断 URL 是否是一个「真实可打的端点」，而不是候选列表或裸域名。
+
+    只放行两种：
+      1. 路径带明确后端后缀（.jsp/.do/.aspx/.php/...）
+      2. 路径含明确 API 段（/api/、/actuator/、/druid/...）
+
+    同时拒绝明显脏数据：
+      - path 为空或只有 "/"
+      - 原始串含空白/逗号/中文顿号（多路径合并的遗留）
+      - 末尾是分隔符（'upload,'）
+    """
+    if not url:
+        return False
+    raw = url.strip()
+    # 脏数据：多路径合并、列表拼接
+    if any(ch in raw for ch in (", ", "，", "、", "|")):
+        return False
+    if raw.endswith((",", ";", "|", "/", ".", "，")):
+        return False
+    # query 残缺：'downloadTheolFile.do?id=' / 'openfile.jsp?id=' ——
+    # 这是 worker 记下的「参数占位符」而不是可请求 URL，实测提权后全是 dead。
+    # 判定：有 query 但末尾是 '=' 或 '&'。
+    if p_query_cut(raw):
+        return False
+    try:
+        p = urlparse(raw)
+    except Exception:
+        return False
+    path = (p.path or "").lower()
+    if not path or path in ("/", "/index.html"):
+        return False
+    # 路径里带逗号/空格 → 合并串
+    if "," in path or " " in path:
+        return False
+    if any(path.endswith(sfx) for sfx in _ENDPOINT_SUFFIXES):
+        return True
+    if any(seg in path for seg in _API_SEGMENT_HINTS):
+        return True
+    return False
+
+
 def pick_risk_endpoints(urls: list[str], limit: int = RISK_PROMOTE_PER_HOST) -> list[str]:
     """从一批 URL 里挑出最值得定向深挖的若干条。
 
     - 先把「一行多路径」的脏 URL 拆开，每个路径单独评估（这是实测踩到的坑）
+    - 必须通过 is_actionable_endpoint：真实后端端点才提权，候选列表/裸域名一律丢弃
     - 分数低于阈值的丢弃
     - 同一 netloc+path 只保留一条（去掉 query 差异造成的重复）
     - 按分数降序取前 limit 条
@@ -349,6 +421,8 @@ def pick_risk_endpoints(urls: list[str], limit: int = RISK_PROMOTE_PER_HOST) -> 
         if not raw:
             continue
         for u in _split_multi_url(raw):
+            if not is_actionable_endpoint(u):
+                continue
             score, kinds = score_endpoint_risk(u)
             if score < RISK_PROMOTE_THRESHOLD:
                 continue
